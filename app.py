@@ -25,7 +25,7 @@ from utils.cache import AgentCache
 
 
 st.set_page_config(
-    page_title="AI Modernization Platform",
+    page_title="AI Enabled App Migration Platform",
     page_icon="AI",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -42,14 +42,14 @@ MODEL_OPTIONS = [
 ]
 
 WORKFLOW_PHASES = [
-    ("reverse_legacy", "Reading legacy VB and SQL files"),
+    ("reverse_legacy", "Analyzing legacy VB and SQL files"),
     ("collate_legacy", "Collating legacy business flow"),
-    ("reverse_target", "Reading target code and SQL files"),
+    ("reverse_target", "Analyzing target code and SQL files"),
     ("collate_target", "Collating target business flow"),
-    ("gap", "Analyzing migration gaps"),
-    ("requirements", "Drafting business requirements"),
-    ("technical_spec", "Drafting technical specification"),
-    ("forward_engineering", "Generating forward-engineered target artifacts"),
+    ("gap", "Analyzing requirement gaps between legacy and target system"),
+    ("requirements", "Drafting incremental business requirements"),
+    ("technical_spec", "Drafting incremental technical specification"),
+    ("forward_engineering", "Generating forward-engineered code components"),
 ]
 
 
@@ -1125,8 +1125,8 @@ def render_comparison(collated: dict, gap_analysis: dict) -> None:
 def main() -> None:
     apply_enterprise_theme()
     init_approval_state()
-    st.title("AI Modernization Platform")
-    st.caption("Reverse engineer legacy and target insurance systems, collate structured specs, and highlight migration gaps.")
+    st.title("AI Powered Migration Platform")
+    #st.caption("Reverse engineer legacy and target insurance systems, collate structured specs, and highlight migration gaps.")
 
     default_legacy_code = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "vb_code")
     default_legacy_sql = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "sql")
@@ -1191,11 +1191,10 @@ def main() -> None:
         st.markdown(
             """
             <div class="hero-card">
-                <div class="eyebrow">Insurance Transformation Intelligence</div>
-                <div class="hero-title">Enterprise modernization analysis for legacy-to-target migration.</div>
+                <div class="eyebrow">Intelligent Migration</div>
+                <div class="hero-title">AI driven - Human assisted platform for application migration to modern platforms</div>
                 <div class="hero-copy">
-                    Analyze two sets of insurance artifacts, reverse engineer their behavior, and surface migration gaps,
-                    compliance exposures, and implementation risk in a single executive-ready workspace.
+                    Reverse Engineering | Canonicalization | Gap Analysis | Business Requirement Creation | Tech Spec Generation | Forward Engineering
                 </div>
             </div>
             """,
