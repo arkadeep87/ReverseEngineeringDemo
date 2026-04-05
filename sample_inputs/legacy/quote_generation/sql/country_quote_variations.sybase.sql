@@ -1,0 +1,13 @@
+INSERT INTO country_tax_rules VALUES ('DE', 'DEFAULT',   0.1900, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('DE', 'HEALTH',    0.2100, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('IT', 'DEFAULT',   0.0900, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('IT', 'FAMILY',    0.1100, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('ES', 'DEFAULT',   0.0800, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('ES', 'TRAVEL',    0.1350, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('PT', 'DEFAULT',   0.0750, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('PT', 'FAMILY',    0.0950, 'Y', 'Y', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('CH', 'DEFAULT',   0.0500, 'Y', 'N', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('CH', 'CORPORATE', 0.0650, 'Y', 'N', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('GB', 'DEFAULT',   0.0600, 'Y', 'N', '2024-01-01', NULL)
+INSERT INTO country_tax_rules VALUES ('GB', 'TRAVEL',    0.1200, 'Y', 'N', '2024-01-01', NULL)
+go
