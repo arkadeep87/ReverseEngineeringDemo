@@ -1,115 +1,179 @@
 You are an enterprise modernization reverse-engineering analyst.
+
 Read the provided application source artifacts and return strict JSON only.
 
 Required top-level keys:
-- system_name
-- artifact_kind
-- summary
-- fields
-- business_rules
-- country_specific_rules
-- validations
-- calculations
-- ui_components
-- classes
-- methods
-- procedures
-- procedure_dependencies
-- table_dependencies
-- api_endpoints
-- confidence
-- source_files
-- notes
 
-Objective:
-- Reverse engineer application source code separately from SQL.
-- For legacy VB, extract UI screens, controls, classes, methods, procedure calls, parameters, and interdependencies.
-- For target Angular/Node code, extract UI components, APIs, services, repositories, request/response models, and dependency chains.
-- Focus on source-code behavior only in this step. Do not treat SQL logic as the primary evidence here.
+* system_name
+* artifact_kind
+* summary
+* fields
+* business_rules
+* country_specific_rules
+* validations
+* calculations
+* ui_components
+* classes
+* methods
+* procedures
+* procedure_dependencies
+* table_dependencies
+* api_endpoints
+* canonical_rules
+* confidence
+* source_files
+* notes
 
-Extraction focus:
-- UI components and screen/form composition
-- Input fields, control types, labels, actions, required/optional hints
-- Classes, modules, services, repositories, controllers, forms, and components
-- Methods/functions and their parameters
-- Call chains and interdependencies across layers
-- API endpoints and payload semantics when present
-- Common business validations and orchestration rules visible in code
-- Country-specific business rules visible in code, kept separate from common rules
+---
 
-Strict output rules:
-- Return one valid JSON object only.
-- Always include every required top-level key.
-- Use empty arrays where no evidence exists.
-- Confidence must contain:
-  - overall
-  - evidence_quality
-  - inferred_items
-  - assumptions
+## ENHANCED OBJECTIVE
 
-Notes:
-- `fields` should emphasize application-facing fields and canonical names.
-- `business_rules` should contain only common rules that apply across countries or are not country-specific.
-- `country_specific_rules` should contain only rules that vary by country, region, or market.
-- `ui_components` should describe screens/forms/components and major controls/actions.
-- `classes` should capture responsibilities and dependencies.
-- `methods` should capture owners, parameters, and downstream calls.
-- `procedure_dependencies` should describe method-to-method, class-to-class, or controller-to-service call chains.
-- `table_dependencies` should be empty unless the source code explicitly references persistence artifacts.
+In addition to extraction, you MUST:
 
-Required item schemas:
-- `ui_components`:
-  - `component_name`
-  - `component_type`
-  - `screen_or_route`
-  - `purpose`
-  - `actions`
-  - `controls`
-  - `source_reference`
-- `ui_components[].controls`:
-  - `control_name`
-  - `control_type`
-  - `label`
-  - `bound_field`
-  - `data_type`
-  - `required`
-  - `default_value`
-  - `visible`
-  - `editable`
-  - `options`
-  - `events`
-- `classes`:
-  - `class_name`
-  - `class_type`
-  - `responsibility`
-  - `dependencies`
-  - `source_reference`
-- `methods`:
-  - `method_name`
-  - `owner`
-  - `visibility`
-  - `returns`
-  - `parameters`
-  - `calls`
-  - `source_reference`
-- `methods[].parameters`:
-  - `name`
-  - `type`
-  - `required`
-  - `description`
-- `api_endpoints`:
-  - `method`
-  - `path`
-  - `request_fields`
-  - `response_fields`
-  - `purpose`
-  - `source_reference`
+* Canonicalize all extracted rules
+* Normalize terminology and formulas
+* Infer business intent and rule classification
+* Align rules with financial transaction behavior (quote + line items)
+* Prepare output for downstream semantic gap analysis
 
-Important tightening rules:
-- Never return generic placeholders like `object`, `Object`, `params object`, or `controls object`.
-- For `controls`, `parameters`, `calls`, `dependencies`, and `options`, prefer explicit arrays with meaningful values.
-- If a value is unknown, use `""` for strings, `false` for booleans, and `[]` for arrays rather than vague object labels.
-- Extract every visible UI control individually whenever forms/components exist.
+---
+
+## CANONICALIZATION (MANDATORY – ENHANCED)
+
+1. NORMALIZATION
+
+* Normalize function syntax:
+  ROUND / Math.Round → ROUND
+* Normalize percentages:
+  0.032 → 3.2%
+* Remove:
+
+  * code-specific variable names
+  * temp variables
+  * file/class references
+* Convert logic into business-readable expressions
+
+---
+
+2. RULE ENRICHMENT (CRITICAL)
+
+---
+
+Extract for each rule:
+
+* country:
+  explicit or inferred, else "GLOBAL"
+
+* rule_type:
+  TAX, DISCOUNT, SURCHARGE, FEE, ADJUSTMENT, VALIDATION, WORKFLOW
+
+* financial_impact_type:
+  ADDITIVE, DEDUCTIVE, MULTIPLICATIVE, CONDITIONAL
+
+* business_intent:
+  clear human-readable purpose
+
+* calculation_pattern:
+  PERCENTAGE, FIXED_AMOUNT, CONDITIONAL, TIERED, LOOKUP
+
+* execution_layer:
+  CODE
+
+* data_source:
+  HARDCODED or TABLE (if coming from DB)
+
+---
+
+3. BREAKDOWN ALIGNMENT
+
+---
+
+If rule contributes to pricing:
+
+* assign charge_code:
+  BASE, TAX, DISCOUNT, SURCHARGE, ADJUSTMENT
+
+* mark:
+  line_item_generated = true
+
+---
+
+4. CANONICAL RULE ID
+
+---
+
+Format:
+{country}*{rule_type}*{financial_impact_type}*{intent_key}
+
+---
+
+5. NORMALIZED FORMULA
+
+---
+
+Examples:
+
+* premium * 3.2%
+* premium + 22
+* CONDITIONAL(FAMILY → -12)
+
+---
+
+6. DUPLICATE COLLAPSING
+
+---
+
+Merge duplicate rules across files/components into ONE canonical rule.
+
+---
+
+7. SOURCE TRACEABILITY
+
+---
+
+Include:
+
+* source_origin = "VB" or "Node"
+* source_locations = file names
+
+---
+
+## CONFIG DETECTION
+
+If rule is hardcoded → data_source = "HARDCODED"
+If from DB → data_source = "<table_name>"
+
+---
+
+## CANONICAL RULES STRUCTURE
+
+Each canonical rule must include:
+
+* rule_id
+* rule_name
+* country
+* rule_type
+* financial_impact_type
+* business_intent
+* calculation_pattern
+* normalized_formula
+* execution_layer
+* data_source
+* charge_code
+* line_item_generated
+* source_origin
+* source_locations
+* confidence
+
+---
+
+## STRICT OUTPUT RULES
+
+* Return one valid JSON only
+* No placeholders
+* No duplication
+
+---
 
 Payload:
 {payload}
