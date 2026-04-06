@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import difflib
+from io import BytesIO
 import json
 from pathlib import Path
 import shutil
@@ -9,6 +10,14 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+try:
+    from docx import Document
+except ImportError:  # pragma: no cover - runtime fallback
+    Document = None
+try:
+    import openpyxl  # noqa: F401
+except ImportError:  # pragma: no cover - runtime fallback
+    openpyxl = None
 
 from config import settings
 from graph import (
@@ -19,9 +28,12 @@ from graph import (
     SME_APPROVED,
     SME_REJECTED,
     run_workflow,
+    stream_resume_from_requirements_approval,
+    stream_resume_from_technical_spec_approval,
     stream_workflow,
 )
 from utils.cache import AgentCache
+from agents import validation as validation_agent
 
 
 st.set_page_config(
@@ -264,6 +276,188 @@ def sanitize_dataframe_for_display(dataframe: pd.DataFrame) -> pd.DataFrame:
     return dataframe.map(normalize_cell)
 
 
+def make_excel_safe_sheet_name(name: str) -> str:
+    sanitized = "".join("_" if ch in '[]:*?/\\' else ch for ch in name).strip()
+    return (sanitized or "Sheet")[:31]
+
+
+def prepare_dataframe_for_excel(items: Any) -> pd.DataFrame:
+    dataframe = normalize_for_table(items)
+    if dataframe.empty:
+        return pd.DataFrame({"message": ["No data available."]})
+    return sanitize_dataframe_for_display(dataframe)
+
+
+def write_excel_sheet(writer, sheet_name: str, items: Any) -> None:
+    dataframe = prepare_dataframe_for_excel(items)
+    dataframe.to_excel(writer, sheet_name=make_excel_safe_sheet_name(sheet_name), index=False)
+
+
+def write_sectioned_excel_sheet(writer, sheet_name: str, sections: list[tuple[str, Any]]) -> None:
+    safe_sheet_name = make_excel_safe_sheet_name(sheet_name)
+    start_row = 0
+    for title, items in sections:
+        title_df = pd.DataFrame([{title: ""}])
+        title_df.to_excel(writer, sheet_name=safe_sheet_name, index=False, header=True, startrow=start_row)
+        start_row += len(title_df.index) + 2
+
+        dataframe = prepare_dataframe_for_excel(items)
+        dataframe.to_excel(writer, sheet_name=safe_sheet_name, index=False, startrow=start_row)
+        start_row += len(dataframe.index) + 3
+
+
+def build_workflow_excel_export(result: dict) -> bytes | None:
+    if openpyxl is None or not result:
+        return None
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        summary_rows = [
+            {"step": "Legacy Code Reverse", "available": bool(result.get("legacy_code_reverse_spec")), "type": "reverse"},
+            {"step": "Legacy SQL Reverse", "available": bool(result.get("legacy_sql_reverse_spec")), "type": "reverse"},
+            {"step": "Legacy Collate", "available": bool(result.get("legacy_spec")), "type": "collate"},
+            {"step": "Target Code Reverse", "available": bool(result.get("target_code_reverse_spec")), "type": "reverse"},
+            {"step": "Target SQL Reverse", "available": bool(result.get("target_sql_reverse_spec")), "type": "reverse"},
+            {"step": "Target Collate", "available": bool(result.get("target_spec")), "type": "collate"},
+            {"step": "Gap Analysis", "available": bool(result.get("gap_analysis")), "type": "gap"},
+            {"step": "Requirements Draft", "available": bool(result.get("requirements_draft")), "type": "requirements"},
+            {"step": "Technical Spec Draft", "available": bool(result.get("technical_spec_draft")), "type": "technical_spec"},
+            {"step": "Forward Engineering", "available": bool(result.get("forward_engineering_output")), "type": "forward_engineering"},
+            {"step": "Validation", "available": bool(result.get("validation_result")), "type": "validation"},
+        ]
+        pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Run Summary", index=False)
+
+        spec_exports = [
+            ("1 Legacy Code", result.get("legacy_code_reverse_spec", {})),
+            ("2 Legacy SQL", result.get("legacy_sql_reverse_spec", {})),
+            ("3 Legacy Collate", result.get("legacy_spec", {})),
+            ("4 Target Code", result.get("target_code_reverse_spec", {})),
+            ("5 Target SQL", result.get("target_sql_reverse_spec", {})),
+            ("6 Target Collate", result.get("target_spec", {})),
+        ]
+        spec_sections = [
+            ("Summary", lambda spec: {"summary": spec.get("summary", ""), "confidence": spec.get("confidence", {}), "source_files": spec.get("source_files", []), "notes": spec.get("notes", [])}),
+            ("Fields", lambda spec: spec.get("fields", [])),
+            ("Common Rules", lambda spec: spec.get("business_rules", [])),
+            ("Country Rules", lambda spec: spec.get("country_specific_rules", [])),
+            ("Validations", lambda spec: spec.get("validations", [])),
+            ("Calculations", lambda spec: spec.get("calculations", [])),
+            ("UI Components", lambda spec: spec.get("ui_components", [])),
+            ("Classes", lambda spec: spec.get("classes", [])),
+            ("Methods", lambda spec: spec.get("methods", [])),
+            ("Procedures", lambda spec: spec.get("procedures", [])),
+            ("Procedure Dependencies", lambda spec: spec.get("procedure_dependencies", [])),
+            ("Table Dependencies", lambda spec: spec.get("table_dependencies", [])),
+            ("API Endpoints", lambda spec: spec.get("api_endpoints", [])),
+        ]
+        for prefix, spec in spec_exports:
+            if not spec:
+                continue
+            sections = [(section_name, extractor(spec)) for section_name, extractor in spec_sections]
+            write_sectioned_excel_sheet(writer, prefix, sections)
+
+        gap_analysis = result.get("gap_analysis", {})
+        if gap_analysis:
+            write_sectioned_excel_sheet(
+                writer,
+                "7 Gap Analysis",
+                [
+                    ("Missing Features", gap_analysis.get("missing_features", [])),
+                    ("Incorrect Implementations", gap_analysis.get("incorrect_implementations", [])),
+                    ("Compliance Gaps", gap_analysis.get("compliance_gaps", [])),
+                    ("Risks", gap_analysis.get("risks", [])),
+                    ("Rule Comparison", format_gap_rule_rows(gap_analysis.get("rule_comparison", []))),
+                    ("Common Rules Missed", format_gap_rule_rows(gap_analysis.get("common_rules_missed", []))),
+                    ("Country Rules Missed", format_gap_rule_rows(gap_analysis.get("country_specific_rules_missed", []))),
+                    ("Confidence", gap_analysis.get("confidence", {})),
+                ],
+            )
+
+        requirements_draft = result.get("requirements_draft", {})
+        if requirements_draft:
+            write_sectioned_excel_sheet(
+                writer,
+                "8 Requirements",
+                [
+                    ("Summary", {
+                        "screen_name": requirements_draft.get("screen_name", ""),
+                        "business_context": requirements_draft.get("business_context", ""),
+                        "assumptions": requirements_draft.get("assumptions", []),
+                        "open_questions_for_sme": requirements_draft.get("open_questions_for_sme", []),
+                        "review_notes": requirements_draft.get("review_notes", []),
+                        "approval": requirements_draft.get("approval", {}),
+                    }),
+                    ("Functional Requirements", requirements_draft.get("functional_requirements", [])),
+                    ("Non Functional Requirements", requirements_draft.get("non_functional_requirements", [])),
+                    ("Compliance Requirements", requirements_draft.get("compliance_requirements", [])),
+                    ("Data Requirements", requirements_draft.get("data_requirements", [])),
+                    ("UI Requirements", requirements_draft.get("ui_requirements", [])),
+                    ("API Requirements", requirements_draft.get("api_requirements", [])),
+                    ("Migration Requirements", requirements_draft.get("migration_requirements", [])),
+                ],
+            )
+
+        technical_spec = result.get("technical_spec_draft", {})
+        if technical_spec:
+            write_sectioned_excel_sheet(
+                writer,
+                "9 Technical Spec",
+                [
+                    ("Summary", {
+                        "screen_name": technical_spec.get("screen_name", ""),
+                        "target_stack": technical_spec.get("target_stack", {}),
+                        "assumptions": technical_spec.get("assumptions", []),
+                        "open_questions_for_architect": technical_spec.get("open_questions_for_architect", []),
+                        "review_notes": technical_spec.get("review_notes", []),
+                        "approval": technical_spec.get("approval", {}),
+                    }),
+                    ("UI Design", technical_spec.get("ui_design", [])),
+                    ("API Design", technical_spec.get("api_design", [])),
+                    ("Service Design", technical_spec.get("service_design", [])),
+                    ("Data Design", technical_spec.get("data_design", [])),
+                    ("Rule Configuration Design", technical_spec.get("rule_configuration_design", [])),
+                    ("Validation Design", technical_spec.get("validation_design", [])),
+                    ("Security And Compliance Design", technical_spec.get("security_and_compliance_design", [])),
+                    ("Integration Design", technical_spec.get("integration_design", [])),
+                ],
+            )
+
+        forward_engineering = result.get("forward_engineering_output", {})
+        if forward_engineering:
+            write_sectioned_excel_sheet(
+                writer,
+                "10 Forward Eng",
+                [
+                    ("Angular Files", forward_engineering.get("angular_files", [])),
+                    ("Node.js Files", forward_engineering.get("nodejs_files", [])),
+                    ("PostgreSQL Files", forward_engineering.get("postgres_files", [])),
+                    ("Test Cases", forward_engineering.get("test_cases", [])),
+                    ("Notes", {
+                        "generation_notes": forward_engineering.get("generation_notes", []),
+                        "traceability_summary": forward_engineering.get("traceability_summary", []),
+                    }),
+                ],
+            )
+
+        validation_result = result.get("validation_result", {})
+        if validation_result:
+            write_sectioned_excel_sheet(
+                writer,
+                "11 Validation",
+                [
+                    ("Summary", validation_result.get("summary", {})),
+                    ("Differences", validation_result.get("differences", [])),
+                    ("Suggestions", validation_result.get("suggestions", [])),
+                    ("Confidence", validation_result.get("confidence", {})),
+                ],
+            )
+
+        if result.get("logs"):
+            write_excel_sheet(writer, "Execution Logs", result.get("logs", []))
+
+    return output.getvalue()
+
+
 def build_nested_rows(items: list[dict], nested_key: str, parent_keys: list[str], child_prefix: str = "") -> list[dict]:
     rows: list[dict] = []
     for item in items:
@@ -392,6 +586,10 @@ def init_approval_state() -> None:
     st.session_state.setdefault("sme_comments", "")
     st.session_state.setdefault("architect_comments", "")
     st.session_state.setdefault("auto_run_analysis", False)
+    st.session_state.setdefault("auto_run_stage", "")
+    st.session_state.setdefault("validation_result", None)
+    st.session_state.setdefault("validation_error", None)
+    st.session_state.setdefault("pending_main_section", "")
 
 
 def sync_approval_state_from_result(result: dict) -> None:
@@ -411,6 +609,126 @@ def render_approval_summary(label: str, status: str, comments: str) -> None:
     st.markdown(f"**{label} Status:** `{status}`")
     if comments.strip():
         st.caption(f"Review comments: {comments.strip()}")
+
+
+def _stringify_value(value: Any) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def _add_doc_section(document, title: str, value: Any) -> None:
+    document.add_heading(title, level=1)
+    if isinstance(value, list):
+        if not value:
+            document.add_paragraph("None")
+            return
+        for item in value:
+            if isinstance(item, dict):
+                paragraph = document.add_paragraph(style="List Bullet")
+                first = True
+                for key, item_value in item.items():
+                    text = f"{key}: {_stringify_value(item_value)}"
+                    if first:
+                        paragraph.add_run(text)
+                        first = False
+                    else:
+                        document.add_paragraph(text, style="List Bullet 2")
+            else:
+                document.add_paragraph(_stringify_value(item), style="List Bullet")
+        return
+
+    if isinstance(value, dict):
+        if not value:
+            document.add_paragraph("None")
+            return
+        for key, item_value in value.items():
+            document.add_paragraph(f"{key}: {_stringify_value(item_value)}", style="List Bullet")
+        return
+
+    document.add_paragraph(_stringify_value(value) if value not in (None, "") else "None")
+
+
+def build_requirements_docx(requirements_draft: dict) -> bytes | None:
+    if not requirements_draft or Document is None:
+        return None
+
+    document = Document()
+    document.add_heading("Business Requirements Document", level=0)
+    document.add_paragraph(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+    section_order = [
+        ("Screen Name", requirements_draft.get("screen_name", "")),
+        ("Business Context", requirements_draft.get("business_context", "")),
+        ("Functional Requirements", requirements_draft.get("functional_requirements", [])),
+        ("Non-Functional Requirements", requirements_draft.get("non_functional_requirements", [])),
+        ("Compliance Requirements", requirements_draft.get("compliance_requirements", [])),
+        ("Data Requirements", requirements_draft.get("data_requirements", [])),
+        ("UI Requirements", requirements_draft.get("ui_requirements", [])),
+        ("API Requirements", requirements_draft.get("api_requirements", [])),
+        ("Migration Requirements", requirements_draft.get("migration_requirements", [])),
+        ("Assumptions", requirements_draft.get("assumptions", [])),
+        ("Open Questions For SME", requirements_draft.get("open_questions_for_sme", [])),
+        ("Review Notes", requirements_draft.get("review_notes", [])),
+        ("Approval", requirements_draft.get("approval", {})),
+    ]
+    for title, value in section_order:
+        _add_doc_section(document, title, value)
+
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def build_technical_spec_docx(technical_spec_draft: dict) -> bytes | None:
+    if not technical_spec_draft or Document is None:
+        return None
+
+    document = Document()
+    document.add_heading("Technical Specification", level=0)
+    document.add_paragraph(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+    section_order = [
+        ("Screen Name", technical_spec_draft.get("screen_name", "")),
+        ("Target Stack", technical_spec_draft.get("target_stack", {})),
+        ("UI Design", technical_spec_draft.get("ui_design", [])),
+        ("API Design", technical_spec_draft.get("api_design", [])),
+        ("Service Design", technical_spec_draft.get("service_design", [])),
+        ("Data Design", technical_spec_draft.get("data_design", [])),
+        ("Rule Configuration Design", technical_spec_draft.get("rule_configuration_design", [])),
+        ("Validation Design", technical_spec_draft.get("validation_design", [])),
+        ("Security And Compliance Design", technical_spec_draft.get("security_and_compliance_design", [])),
+        ("Integration Design", technical_spec_draft.get("integration_design", [])),
+        ("Assumptions", technical_spec_draft.get("assumptions", [])),
+        ("Open Questions For Architect", technical_spec_draft.get("open_questions_for_architect", [])),
+        ("Review Notes", technical_spec_draft.get("review_notes", [])),
+        ("Approval", technical_spec_draft.get("approval", {})),
+    ]
+    for title, value in section_order:
+        _add_doc_section(document, title, value)
+
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def render_word_download_button(document_label: str, file_name: str, document_bytes: bytes | None, button_key: str) -> None:
+    if Document is None:
+        st.info("Install `python-docx` to enable Word document downloads.")
+        return
+    if not document_bytes:
+        st.info(f"{document_label} download will be available once the document is generated.")
+        return
+    st.download_button(
+        label=f"Download {document_label}",
+        data=document_bytes,
+        file_name=file_name,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=button_key,
+        use_container_width=True,
+    )
 
 
 def filter_country_specific_requirements(functional_requirements: list[dict]) -> list[dict]:
@@ -473,6 +791,12 @@ def render_requirements_document(requirements_draft: dict) -> None:
         st.info("Requirements draft will appear after analysis runs.")
         return
 
+    render_word_download_button(
+        "BRD (.docx)",
+        "business_requirements_document.docx",
+        build_requirements_docx(requirements_draft),
+        "download_brd_docx",
+    )
     st.markdown("**Overview**")
     st.write(requirements_draft.get("business_context", "No business context available."))
 
@@ -520,6 +844,12 @@ def render_technical_spec_document(technical_spec_draft: dict) -> None:
         st.info("Technical specification draft will appear after SME approval and the next analysis run.")
         return
 
+    render_word_download_button(
+        "Technical Specification (.docx)",
+        "technical_specification.docx",
+        build_technical_spec_docx(technical_spec_draft),
+        "download_technical_spec_docx",
+    )
     st.markdown("**Overview**")
     st.write(f"Target stack: {json.dumps(technical_spec_draft.get('target_stack', {}), ensure_ascii=False)}")
 
@@ -602,20 +932,80 @@ def get_generated_target_root() -> Path:
     return settings.outputs_dir / "forward_engineering" / "target_candidate"
 
 
-def build_generated_artifact_path(group_name: str, file_name: str) -> Path:
+def _is_relative_to(path: Path, other: Path) -> bool:
+    try:
+        path.relative_to(other)
+        return True
+    except ValueError:
+        return False
+
+
+def _copy_folder_contents(source: Path, destination: Path) -> None:
+    if not source.exists() or not source.is_dir():
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, target)
+
+
+def seed_generated_target_root(generated_root: Path, target_code_folder: str, target_sql_folder: str) -> None:
+    target_code_root = Path(target_code_folder)
+    target_sql_root = Path(target_sql_folder)
+
+    if target_code_root.exists() and target_code_root.is_dir():
+        _copy_folder_contents(target_code_root, generated_root)
+
+    if (
+        target_sql_root.exists()
+        and target_sql_root.is_dir()
+        and not _is_relative_to(target_sql_root, target_code_root)
+    ):
+        sql_destination = generated_root / target_sql_root.name
+        _copy_folder_contents(target_sql_root, sql_destination)
+
+
+def build_generated_artifact_path(
+    group_name: str,
+    file_name: str,
+    target_code_folder: str,
+    target_sql_folder: str,
+) -> Path:
     root = get_generated_target_root()
     safe_name = Path(file_name).name
+    search_roots = [target_code_folder] if group_name != "postgres_files" else [target_sql_folder, target_code_folder]
+    matched_target_file = find_matching_target_file(safe_name, search_roots)
+
+    if matched_target_file:
+        for search_root in search_roots:
+            root_path = Path(search_root)
+            if root_path.exists() and _is_relative_to(matched_target_file, root_path):
+                relative_path = matched_target_file.relative_to(root_path)
+                if group_name == "postgres_files" and search_root == target_sql_folder and not _is_relative_to(
+                    Path(target_sql_folder), Path(target_code_folder)
+                ):
+                    return root / Path(target_sql_folder).name / relative_path
+                return root / relative_path
+
     if group_name == "angular_files":
         return root / "frontend" / "src" / "app" / "quote-generation" / safe_name
     if group_name == "nodejs_files":
-        return root / "backend" / "src" / safe_name
+        return root / "backend" / "src" / "services" / safe_name
     return root / "sql" / safe_name
 
 
-def materialize_forward_engineering_output(output: dict) -> dict:
+def materialize_forward_engineering_output(output: dict, target_code_folder: str, target_sql_folder: str) -> dict:
+    cache_payload = {
+        "output": output,
+        "target_code_folder": target_code_folder,
+        "target_sql_folder": target_sql_folder,
+    }
     cache = AgentCache(settings.cache_dir)
     if settings.cache_enabled:
-        cached = cache.load("forward_engineering_ui", output)
+        cached = cache.load("forward_engineering_ui", cache_payload)
         if cached:
             generated_root = Path(cached.get("generated_root", ""))
             generated_files = cached.get("generated_files", [])
@@ -626,6 +1016,7 @@ def materialize_forward_engineering_output(output: dict) -> dict:
     if generated_root.exists():
         shutil.rmtree(generated_root)
     generated_root.mkdir(parents=True, exist_ok=True)
+    seed_generated_target_root(generated_root, target_code_folder, target_sql_folder)
 
     generated_files: list[dict] = []
     for group_name in ("angular_files", "nodejs_files", "postgres_files"):
@@ -633,14 +1024,21 @@ def materialize_forward_engineering_output(output: dict) -> dict:
             file_name = item.get("file_name", "")
             if not file_name:
                 continue
-            destination = build_generated_artifact_path(group_name, file_name)
+            destination = build_generated_artifact_path(
+                group_name,
+                file_name,
+                target_code_folder,
+                target_sql_folder,
+            )
             destination.parent.mkdir(parents=True, exist_ok=True)
+            relative_generated_path = destination.relative_to(generated_root)
             destination.write_text(item.get("content", ""), encoding="utf-8")
             generated_files.append(
                 {
                     "group": group_name,
                     "file_name": file_name,
                     "generated_path": str(destination),
+                    "generated_relative_path": str(relative_generated_path),
                     "purpose": item.get("purpose", ""),
                     "related_requirement_ids": item.get("related_requirement_ids", []),
                     "content": item.get("content", ""),
@@ -649,7 +1047,7 @@ def materialize_forward_engineering_output(output: dict) -> dict:
 
     materialized = {"generated_root": str(generated_root), "generated_files": generated_files}
     if settings.cache_enabled:
-        cache.save("forward_engineering_ui", output, materialized)
+        cache.save("forward_engineering_ui", cache_payload, materialized)
     return materialized
 
 
@@ -667,14 +1065,38 @@ def find_matching_target_file(file_name: str, search_roots: list[str]) -> Path |
     return None
 
 
+def find_original_file_for_generated_artifact(item: dict, target_code_folder: str, target_sql_folder: str) -> Path | None:
+    generated_relative_path = item.get("generated_relative_path", "")
+    target_code_root = Path(target_code_folder)
+    target_sql_root = Path(target_sql_folder)
+
+    if generated_relative_path:
+        relative_path = Path(generated_relative_path)
+        candidate_in_code_root = target_code_root / relative_path
+        if candidate_in_code_root.exists():
+            return candidate_in_code_root
+
+        if relative_path.parts:
+            if relative_path.parts[0] == target_sql_root.name:
+                sql_relative_path = Path(*relative_path.parts[1:]) if len(relative_path.parts) > 1 else Path()
+                candidate_in_sql_root = target_sql_root / sql_relative_path
+                if candidate_in_sql_root.exists():
+                    return candidate_in_sql_root
+            else:
+                candidate_in_sql_root = target_sql_root / relative_path
+                if candidate_in_sql_root.exists():
+                    return candidate_in_sql_root
+
+    return find_matching_target_file(item.get("file_name", ""), [target_code_folder, target_sql_folder])
+
+
 def build_forward_engineering_comparison(generated_files: list[dict], target_code_folder: str, target_sql_folder: str) -> list[dict]:
-    search_roots = [target_code_folder, target_sql_folder]
     comparisons: list[dict] = []
 
     for item in generated_files:
         file_name = item.get("file_name", "")
         generated_content = item.get("content", "")
-        original_path = find_matching_target_file(file_name, search_roots)
+        original_path = find_original_file_for_generated_artifact(item, target_code_folder, target_sql_folder)
         original_content = original_path.read_text(encoding="utf-8") if original_path else ""
         if not original_path:
             status = "Added"
@@ -730,6 +1152,7 @@ def render_forward_engineering_summary(output: dict, comparison_items: list[dict
             {
                 "status": item.get("status", ""),
                 "file_name": item.get("file_name", ""),
+                "generated_relative_path": item.get("generated_relative_path", ""),
                 "purpose": item.get("purpose", ""),
                 "generated_path": item.get("generated_path", ""),
                 "original_path": item.get("original_path", ""),
@@ -779,6 +1202,8 @@ def render_forward_engineering_proof(comparison_items: list[dict]) -> None:
             st.info("No matching target file found for this generated artifact.")
 
     with generated_tab:
+        if selected_artifact.get("generated_relative_path"):
+            st.caption(f"Generated target path: {selected_artifact.get('generated_relative_path')}")
         st.code(generated_content, language="text")
 
     with diff_tab:
@@ -789,28 +1214,39 @@ def render_forward_engineering_proof(comparison_items: list[dict]) -> None:
             st.info("Diff is unavailable because no original target file match was found.")
 
 
-def render_phase_progress(logs: list[dict]) -> None:
-    phase_map = dict(WORKFLOW_PHASES)
-    seen = {entry.get("agent") for entry in logs}
-    completed = sum(1 for key, _label in WORKFLOW_PHASES if key in seen)
-    progress = completed / len(WORKFLOW_PHASES)
-    st.progress(progress, text=f"Workflow completion: {int(progress * 100)}%")
+def render_validation_result(validation_result: dict) -> None:
+    if not validation_result:
+        st.info("Run validation after forward engineering to compare generated target artifacts against the source behavior.")
+        return
 
-    cols = st.columns(len(phase_map))
-    for index, (agent, label) in enumerate(phase_map.items()):
-        state = "Complete" if agent in seen else "Pending"
-        cols[index].markdown(
-            f"""
-            <div class="panel-card phase-card">
-                <div class="small-label">Phase {index + 1}</div>
-                <div class="phase-title">
-                    <div class="section-title">{label}</div>
-                </div>
-                <span class="status-chip">{state}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    summary = validation_result.get("summary", {})
+    top1, top2, top3 = st.columns(3)
+    top1.metric("Sync Score", f"{to_float(summary.get('sync_score', 0.0)):.0%}")
+    top2.metric("Differences", str(summary.get("difference_count", 0)))
+    top3.metric("Suggestions", str(summary.get("suggestion_count", 0)))
+
+    notes = summary.get("notes", [])
+    if notes:
+        st.caption(" ".join(str(item) for item in notes))
+
+    st.markdown("**Differences**")
+    render_table(validation_result.get("differences", []), "No material differences detected.")
+
+    st.markdown("**Suggestions**")
+    render_table(validation_result.get("suggestions", []), "No suggestions generated.")
+
+
+def format_gap_rule_rows(items: list[dict], prefix: str = "BR") -> list[dict]:
+    rows: list[dict] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        canonical_rule_key = str(row.get("rule_id", "")).strip()
+        row["rule_id"] = f"{prefix}-{index:03d}"
+        row["Canonical Rule Key"] = canonical_rule_key.replace("*", "_") if canonical_rule_key else ""
+        rows.append(row)
+    return rows
 
 
 def render_spec(spec: dict, title: str) -> None:
@@ -959,12 +1395,12 @@ def render_gap(gap_analysis: dict) -> None:
     with missed_rules_tab:
         common_tab, country_tab = st.tabs(["Common Rules Missed", "Country-Specific Rules Missed"])
         with common_tab:
-            render_table(common_rules_missed, "No common rules missed were identified.")
+            render_table(format_gap_rule_rows(common_rules_missed), "No common rules missed were identified.")
         with country_tab:
-            render_table(country_specific_rules_missed, "No country-specific rules missed were identified.")
+            render_table(format_gap_rule_rows(country_specific_rules_missed), "No country-specific rules missed were identified.")
 
     with comparison_tab:
-        comparison_df = normalize_for_table(gap_analysis.get("rule_comparison", []))
+        comparison_df = normalize_for_table(format_gap_rule_rows(gap_analysis.get("rule_comparison", [])))
         if not comparison_df.empty and "confidence" in comparison_df.columns:
             comparison_df["confidence"] = comparison_df["confidence"].map(
                 lambda value: f"{to_float(value):.0%}" if value not in (None, "") else value
@@ -1113,13 +1549,13 @@ def render_comparison(collated: dict, gap_analysis: dict) -> None:
         render_table(collated.get("modernization_focus_areas", []), "No focus areas available.")
 
     with common_rules_tab:
-        render_table(gap_analysis.get("common_rules_missed", []), "No common rules missed available.")
+        render_table(format_gap_rule_rows(gap_analysis.get("common_rules_missed", [])), "No common rules missed available.")
 
     with country_rules_tab:
-        render_table(gap_analysis.get("country_specific_rules_missed", []), "No country-specific rules missed available.")
+        render_table(format_gap_rule_rows(gap_analysis.get("country_specific_rules_missed", [])), "No country-specific rules missed available.")
 
     with rules_tab:
-        render_table(gap_analysis.get("rule_comparison", []), "No rule comparison available.")
+        render_table(format_gap_rule_rows(gap_analysis.get("rule_comparison", [])), "No rule comparison available.")
 
 
 def main() -> None:
@@ -1132,7 +1568,10 @@ def main() -> None:
     default_legacy_sql = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "sql")
     default_target_code = str(settings.sample_inputs_dir / "target" / "quote_generation")
     default_target_sql = str(settings.sample_inputs_dir / "target" / "quote_generation" / "sql")
-    model_options = MODEL_OPTIONS if settings.model in MODEL_OPTIONS else [settings.model, *MODEL_OPTIONS]
+    model_options = MODEL_OPTIONS.copy()
+    if settings.model and settings.model not in model_options:
+        model_options.insert(0, settings.model)
+    selected_model_index = model_options.index(settings.model) if settings.model in model_options else 0
 
     with st.sidebar:
         st.markdown("## Control Center")
@@ -1162,7 +1601,7 @@ def main() -> None:
         selected_model = st.selectbox(
             "Model",
             options=model_options,
-            index=model_options.index(settings.model),
+            index=selected_model_index,
         )
         cache_enabled = st.toggle(
             "Caching",
@@ -1185,6 +1624,7 @@ def main() -> None:
     settings.model = selected_model
     settings.cache_enabled = cache_enabled
     auto_run_analysis = st.session_state.pop("auto_run_analysis", False)
+    auto_run_stage = st.session_state.pop("auto_run_stage", "")
 
     intro_col, stat_col = st.columns([2, 1])
     with intro_col:
@@ -1219,6 +1659,20 @@ def main() -> None:
         )
 
     if run_clicked or auto_run_analysis:
+        approved_requirements_for_run = st.session_state.get("approved_requirements")
+        approved_technical_spec_for_run = st.session_state.get("approved_technical_spec")
+        prior_state_for_run = st.session_state.get("analysis_result") if auto_run_analysis else None
+
+        if run_clicked and not auto_run_analysis:
+            approved_requirements_for_run = None
+            approved_technical_spec_for_run = None
+            st.session_state["approved_requirements"] = None
+            st.session_state["approved_technical_spec"] = None
+            st.session_state["sme_comments"] = ""
+            st.session_state["architect_comments"] = ""
+            st.session_state["validation_result"] = None
+            st.session_state["validation_error"] = None
+
         st.session_state.pop("analysis_error", None)
         st.session_state.pop("analysis_trace_dir", None)
         progress_placeholder = st.empty()
@@ -1242,15 +1696,34 @@ def main() -> None:
                 },
             )
             result: dict = {}
-            for partial_state in stream_workflow(
-                legacy_code_folder=legacy_code_folder,
-                legacy_sql_folder=legacy_sql_folder,
-                target_code_folder=target_code_folder,
-                target_sql_folder=target_sql_folder,
-                approved_requirements=st.session_state.get("approved_requirements"),
-                approved_technical_spec=st.session_state.get("approved_technical_spec"),
-                prior_state=st.session_state.get("analysis_result") if auto_run_analysis else None,
+            if auto_run_analysis and auto_run_stage == "technical_spec" and approved_requirements_for_run:
+                workflow_stream = stream_resume_from_requirements_approval(
+                    prior_state=prior_state_for_run,
+                    approved_requirements=approved_requirements_for_run,
+                )
+            elif (
+                auto_run_analysis
+                and auto_run_stage == "forward_engineering"
+                and approved_requirements_for_run
+                and approved_technical_spec_for_run
             ):
+                workflow_stream = stream_resume_from_technical_spec_approval(
+                    prior_state=prior_state_for_run,
+                    approved_requirements=approved_requirements_for_run,
+                    approved_technical_spec=approved_technical_spec_for_run,
+                )
+            else:
+                workflow_stream = stream_workflow(
+                    legacy_code_folder=legacy_code_folder,
+                    legacy_sql_folder=legacy_sql_folder,
+                    target_code_folder=target_code_folder,
+                    target_sql_folder=target_sql_folder,
+                    approved_requirements=approved_requirements_for_run,
+                    approved_technical_spec=approved_technical_spec_for_run,
+                    prior_state=prior_state_for_run,
+                )
+
+            for partial_state in workflow_stream:
                 result = partial_state
                 write_run_trace_snapshot(trace_dir, partial_state, "running")
                 logs = partial_state.get("logs", [])
@@ -1304,53 +1777,68 @@ def main() -> None:
         result["technical_spec_draft"] = approved_technical_spec
         technical_spec_draft = deep_copy_document(approved_technical_spec)
 
+    persisted_validation_result = result.get("validation_result")
+    if st.session_state.get("validation_result") is None and persisted_validation_result:
+        st.session_state["validation_result"] = persisted_validation_result
+
+    workflow_excel_bytes = build_workflow_excel_export(result)
+
     requirements_status = get_approval_status(requirements_draft, PENDING_SME_APPROVAL)
     technical_spec_status = get_approval_status(technical_spec_draft, PENDING_ARCHITECT_APPROVAL)
     generated_target = {"generated_root": "", "generated_files": []}
     forward_comparison_items: list[dict] = []
     if result.get("forward_engineering_output"):
-        generated_target = materialize_forward_engineering_output(result.get("forward_engineering_output", {}))
+        generated_target = materialize_forward_engineering_output(
+            result.get("forward_engineering_output", {}),
+            target_code_folder,
+            target_sql_folder,
+        )
         forward_comparison_items = build_forward_engineering_comparison(
             generated_target.get("generated_files", []),
             target_code_folder,
             target_sql_folder,
         )
 
-    render_phase_progress(result.get("logs", []))
-
-    (
-        overview_tab,
-        step_outputs_tab,
-        legacy_tab,
-        target_tab,
-        flow_tab,
-        comparison_tab,
-        gap_tab,
-        requirements_tab,
-        technical_spec_tab,
-        forward_engineering_tab,
-        forward_proof_tab,
-        logs_tab,
-        raw_tab,
-    ) = st.tabs(
-        [
-            "Overview",
-            "Step Outputs",
-            "Legacy Spec",
-            "Target Spec",
-            "Flow Maps",
-            "Comparison",
-            "Gap Analysis",
-            "Requirements Draft",
-            "Technical Specification Draft",
-            "Forward Engineering",
-            "Forward Engineering Proof",
-            "Execution Logs",
-            "Raw JSON",
-        ]
+    section_options = [
+        "Overview",
+        "Step Outputs",
+        "Legacy Spec",
+        "Target Spec",
+        "Flow Maps",
+        "Comparison",
+        "Gap Analysis",
+        "Requirements Draft",
+        "Technical Specification Draft",
+        "Forward Engineering",
+        "Forward Engineering Proof",
+        "Validation",
+        "Execution Logs",
+        "Raw JSON",
+    ]
+    pending_main_section = st.session_state.pop("pending_main_section", "")
+    if pending_main_section in section_options:
+        st.session_state["active_main_section"] = pending_main_section
+    st.markdown("**Workspace Sections**")
+    if openpyxl is None:
+        st.info("Install `openpyxl` to enable the Excel export of workflow outputs.")
+    elif workflow_excel_bytes:
+        st.download_button(
+            label="Download Workflow Excel",
+            data=workflow_excel_bytes,
+            file_name="modernization_workflow_export.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_workflow_excel",
+            use_container_width=False,
+        )
+    active_section = st.radio(
+        "Workspace Sections",
+        options=section_options,
+        key="active_main_section",
+        horizontal=True,
+        label_visibility="collapsed",
     )
 
-    with overview_tab:
+    if active_section == "Overview":
         gap_analysis = result.get("gap_analysis", {})
         collated = result.get("collated_spec", {})
         overview_gap_confidence = to_float(gap_analysis.get("confidence", {}).get("gap_confidence", 0.0))
@@ -1367,29 +1855,29 @@ def main() -> None:
         st.markdown("**Key Differences**")
         render_table(collated.get("key_differences", []), "No key differences available.")
 
-    with step_outputs_tab:
+    elif active_section == "Step Outputs":
         render_step_outputs(result)
 
-    with legacy_tab:
+    elif active_section == "Legacy Spec":
         render_spec(result.get("legacy_spec", {}), "Legacy Insurance System")
 
-    with target_tab:
+    elif active_section == "Target Spec":
         render_spec(result.get("target_spec", {}), "Target Insurance System")
 
-    with flow_tab:
+    elif active_section == "Flow Maps":
         legacy_flow_tab, target_flow_tab = st.tabs(["Legacy Flow Map", "Target Flow Map"])
         with legacy_flow_tab:
             render_flow_map(result.get("legacy_spec", {}).get("flow_map", {}), "Legacy System Flow Map")
         with target_flow_tab:
             render_flow_map(result.get("target_spec", {}).get("flow_map", {}), "Target System Flow Map")
 
-    with comparison_tab:
+    elif active_section == "Comparison":
         render_comparison(result.get("collated_spec", {}), result.get("gap_analysis", {}))
 
-    with gap_tab:
+    elif active_section == "Gap Analysis":
         render_gap(result.get("gap_analysis", {}))
 
-    with requirements_tab:
+    elif active_section == "Requirements Draft":
         render_requirements_document(requirements_draft)
         st.markdown("**SME Review Controls**")
         render_approval_summary("Requirements", requirements_status, st.session_state.get("sme_comments", ""))
@@ -1413,6 +1901,9 @@ def main() -> None:
                     st.session_state["approved_technical_spec"] = None
                     st.session_state["analysis_result"]["requirements_draft"] = approved_doc
                     st.session_state["auto_run_analysis"] = True
+                    st.session_state["auto_run_stage"] = "technical_spec"
+                    st.session_state["validation_result"] = None
+                    st.session_state["validation_error"] = None
                     st.success("Requirements approved. Continuing automatically to technical specification generation.")
                     st.rerun()
                 else:
@@ -1434,7 +1925,7 @@ def main() -> None:
                 else:
                     st.warning("No requirements draft is available yet.")
 
-    with technical_spec_tab:
+    elif active_section == "Technical Specification Draft":
         if requirements_status != SME_APPROVED:
             st.info("Technical specification is blocked until the requirements draft is SME approved.")
         else:
@@ -1463,6 +1954,9 @@ def main() -> None:
                     st.session_state["approved_technical_spec"] = approved_doc
                     st.session_state["analysis_result"]["technical_spec_draft"] = approved_doc
                     st.session_state["auto_run_analysis"] = True
+                    st.session_state["auto_run_stage"] = "forward_engineering"
+                    st.session_state["validation_result"] = None
+                    st.session_state["validation_error"] = None
                     st.success("Technical specification approved. Continuing automatically to forward engineering generation.")
                     st.rerun()
                 else:
@@ -1483,7 +1977,7 @@ def main() -> None:
                 else:
                     st.warning("No technical specification draft is available yet.")
 
-    with forward_engineering_tab:
+    elif active_section == "Forward Engineering":
         if requirements_status != SME_APPROVED:
             st.info("Forward engineering is blocked until the requirements draft is SME approved.")
         elif technical_spec_status != ARCHITECT_APPROVED:
@@ -1494,8 +1988,39 @@ def main() -> None:
                 forward_comparison_items,
                 generated_target.get("generated_root", ""),
             )
+            if st.button("Validate Generated Target", use_container_width=True):
+                try:
+                    st.session_state["validation_error"] = None
+                    with st.spinner("Running validation on generated target artifacts..."):
+                        validation_result = validation_agent.run(
+                            legacy_spec=result.get("legacy_spec", {}),
+                            requirements=requirements_draft,
+                            technical_spec=technical_spec_draft,
+                            generated_files=generated_target.get("generated_files", []),
+                            logger=lambda _a, _m: None,
+                        )
+                    st.session_state["validation_result"] = validation_result
+                    st.session_state["analysis_result"]["validation_result"] = validation_result
+                    st.session_state["pending_main_section"] = "Validation"
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state["validation_error"] = str(exc)
+                    st.rerun()
 
-    with forward_proof_tab:
+    elif active_section == "Validation":
+        if requirements_status != SME_APPROVED:
+            st.info("Validation is blocked until the requirements draft is SME approved.")
+        elif technical_spec_status != ARCHITECT_APPROVED:
+            st.info("Validation is blocked until the technical specification is architect approved.")
+        elif not result.get("forward_engineering_output"):
+            st.info("Validation is available after forward engineering generates target artifacts.")
+        else:
+            if st.session_state.get("validation_error"):
+                st.error(st.session_state["validation_error"])
+            validation_result = st.session_state.get("validation_result") or result.get("validation_result")
+            render_validation_result(validation_result)
+
+    elif active_section == "Forward Engineering Proof":
         if requirements_status != SME_APPROVED:
             st.info("Forward engineering proof is blocked until the requirements draft is SME approved.")
         elif technical_spec_status != ARCHITECT_APPROVED:
@@ -1503,10 +2028,10 @@ def main() -> None:
         else:
             render_forward_engineering_proof(forward_comparison_items)
 
-    with logs_tab:
+    elif active_section == "Execution Logs":
         render_logs(result.get("logs", []))
 
-    with raw_tab:
+    elif active_section == "Raw JSON":
         st.json(result, expanded=False)
 
 

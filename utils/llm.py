@@ -723,6 +723,60 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
     }
 
 
+def _build_mock_validation_response(input_payload: dict) -> dict:
+    generated_files = ensure_list(input_payload.get("generated_files"))
+    impacted_files = [item.get("generated_relative_path") or item.get("file_name", "") for item in generated_files[:3] if isinstance(item, dict)]
+    differences = [
+        {
+            "title": "Country-specific parity is only partially implemented",
+            "category": "business_rules",
+            "severity": "high",
+            "source_expectation": "Generated target should preserve approved source parity for country-sensitive quote behavior.",
+            "generated_behavior": "Generated artifacts focus on the core quote flow, but broader country-specific handling is not fully evidenced.",
+            "impacted_files": impacted_files,
+            "recommendation": "Extend workflow, pricing, and persistence files to cover approved country-specific scenarios.",
+        },
+        {
+            "title": "Generated artifact coverage is narrower than the full source estate",
+            "category": "coverage",
+            "severity": "medium",
+            "source_expectation": "Generated target should cover the approved source and technical design scope.",
+            "generated_behavior": "Only a subset of files is generated and validated as modified.",
+            "impacted_files": impacted_files,
+            "recommendation": "Review uncovered source behaviors and add follow-on generated changes where required.",
+        },
+    ]
+    suggestions = [
+        {
+            "priority": "high",
+            "suggestion": "Validate each generated service against approved functional requirements and legacy rule coverage.",
+            "target_files": impacted_files,
+            "rationale": "Service-layer mismatches create the biggest parity risk.",
+        },
+        {
+            "priority": "medium",
+            "suggestion": "Add targeted regression tests for source behaviors that are not clearly represented in the generated output.",
+            "target_files": impacted_files,
+            "rationale": "This reduces the chance of source-to-generated behavior drift.",
+        },
+    ]
+    return {
+        "summary": {
+            "overall_status": "partially_aligned",
+            "sync_score": 0.74,
+            "difference_count": len(differences),
+            "suggestion_count": len(suggestions),
+            "notes": ["Mock validation compares generated artifacts to source intent and approved design at a high level."],
+        },
+        "differences": differences,
+        "suggestions": suggestions,
+        "confidence": {
+            "validation_confidence": 0.82,
+            "notes": ["Mock validation output generated without live LLM execution."],
+        },
+    }
+
+
 def _build_mock_response(agent_name: str, input_payload: dict) -> dict:
     system_name = input_payload.get("system_name", agent_name)
     file_names = [item.get("name", "unknown") for item in input_payload.get("files", [])]
@@ -746,6 +800,9 @@ def _build_mock_response(agent_name: str, input_payload: dict) -> dict:
 
     if agent_name == "forward_engineering":
         return _build_mock_forward_engineering_response(input_payload)
+
+    if agent_name == "validation":
+        return _build_mock_validation_response(input_payload)
 
     return {
         "missing_features": [

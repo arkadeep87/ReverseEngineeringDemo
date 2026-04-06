@@ -35,6 +35,17 @@ def ensure_list(value: Any) -> list[Any]:
     return [value]
 
 
+def ensure_float(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
 def normalize_reverse_output(payload: dict[str, Any], system_name: str) -> dict[str, Any]:
     return {
         "system_name": payload.get("system_name") or system_name,
@@ -42,6 +53,7 @@ def normalize_reverse_output(payload: dict[str, Any], system_name: str) -> dict[
         "summary": payload.get("summary", ""),
         "fields": ensure_list(payload.get("fields")),
         "business_rules": ensure_list(payload.get("business_rules")),
+        "canonical_rules": ensure_list(payload.get("canonical_rules")),
         "country_specific_rules": ensure_list(payload.get("country_specific_rules")),
         "validations": ensure_list(payload.get("validations")),
         "calculations": ensure_list(payload.get("calculations")),
@@ -82,7 +94,7 @@ def normalize_gap_output(payload: dict[str, Any]) -> dict[str, Any]:
         "common_rules_missed": ensure_list(payload.get("common_rules_missed")),
         "country_specific_rules_missed": ensure_list(payload.get("country_specific_rules_missed")),
         "confidence": {
-            "gap_confidence": confidence.get("gap_confidence", 0.0),
+            "gap_confidence": ensure_float(confidence.get("gap_confidence", 0.0)),
             "coverage_of_analysis": confidence.get("coverage_of_analysis", {}),
             "notes": ensure_list(confidence.get("notes")),
         },
@@ -98,4 +110,24 @@ def normalize_forward_engineering_output(payload: dict[str, Any]) -> dict[str, A
         "test_cases": ensure_list(payload.get("test_cases")),
         "generation_notes": ensure_list(payload.get("generation_notes")),
         "traceability_summary": ensure_list(payload.get("traceability_summary")),
+    }
+
+
+def normalize_validation_output(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary", {})
+    confidence = payload.get("confidence", {})
+    return {
+        "summary": {
+            "overall_status": summary.get("overall_status", "unknown"),
+            "sync_score": ensure_float(summary.get("sync_score", 0.0)),
+            "difference_count": int(ensure_float(summary.get("difference_count", 0))),
+            "suggestion_count": int(ensure_float(summary.get("suggestion_count", 0))),
+            "notes": ensure_list(summary.get("notes")),
+        },
+        "differences": ensure_list(payload.get("differences")),
+        "suggestions": ensure_list(payload.get("suggestions")),
+        "confidence": {
+            "validation_confidence": ensure_float(confidence.get("validation_confidence", 0.0)),
+            "notes": ensure_list(confidence.get("notes")),
+        },
     }

@@ -12,7 +12,7 @@ class Settings:
     outputs_dir: Path = field(init=False)
     cache_dir: Path = field(init=False)
     sample_inputs_dir: Path = field(init=False)
-    model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+    model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", ""))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
     cache_enabled: bool = True

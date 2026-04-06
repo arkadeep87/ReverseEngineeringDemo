@@ -16,6 +16,7 @@ Required top-level keys:
 Objective:
 
 * Compare the final consolidated legacy specification and final consolidated target specification.
+* Use reverse-engineered canonical rules as the PRIMARY source of truth for rule-level matching.
 * Identify functional, control, compliance, and operational parity gaps that matter in a real modernization program.
 
 Strict output rules:
@@ -34,6 +35,16 @@ Strict output rules:
 ## PRE-COMPARISON NORMALIZATION (MANDATORY)
 
 Before identifying any gaps, you MUST normalize and canonicalize both legacy and target rules:
+
+PRIMARY INPUT RULE:
+
+* `legacy_canonical_rules` and `target_canonical_rules` are the primary rule-comparison inputs.
+* Use `legacy_spec` and `target_spec` as supporting summarized context only.
+* Do NOT rely only on summarized `country_specific_rules` when canonical rules are available.
+* Every materially distinct legacy canonical rule should be either:
+  * matched to an equivalent target canonical rule,
+  * reported as materially different,
+  * or reported as missing.
 
 1. Normalize syntax and structure:
 
@@ -103,7 +114,7 @@ Rules:
 
 ## GAP DETECTION DECISION LOGIC
 
-For each legacy rule:
+For each legacy canonical rule:
 
 1. Find matching target rule using canonical identity
 2. If match found:
@@ -115,6 +126,12 @@ For each legacy rule:
 3. If no match found:
 
    * Add to missing_features
+
+ACCOUNTING REQUIREMENT:
+
+* Do not collapse multiple distinct legacy canonical rules into one gap item unless they are truly the same business rule.
+* SQL/config/reference-data rules must not be silently merged into UI/default rules if they represent separate business behavior.
+* Preserve distinct country-specific tax/config rules when they are materially different by rate, policy type, or lookup behavior.
 
 ---
 
@@ -217,6 +234,7 @@ country_specific_rules_missed:
 
 * Same as above but MUST include country
 * DO NOT include if equivalent logic exists in target
+* When multiple distinct canonical rules exist for a country, report them as separate entries unless they are exact duplicates after normalization
 
 ---
 
@@ -246,6 +264,7 @@ Include risks such as:
 Before finalizing output, validate:
 
 * No duplicate gaps for same rule
+* No missing accounting for legacy canonical rules
 * No country rules incorrectly marked as missing if present
 * No gaps based on syntax-only differences
 * All gaps are materially meaningful
@@ -256,8 +275,8 @@ Before finalizing output, validate:
 
 confidence must include:
 
-* gap_confidence (High/Medium/Low)
-* coverage_of_analysis (percentage or qualitative)
+* gap_confidence (numeric decimal between 0.0 and 1.0)
+* coverage_of_analysis (numeric decimal between 0.0 and 1.0, or a structured object if needed)
 * notes (explain assumptions, uncertainties, normalization applied)
 
 ---

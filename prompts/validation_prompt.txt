@@ -1,0 +1,236 @@
+You are performing an enterprise modernization validation assessment between:
+
+* the source system behavior described in the legacy specification
+* the approved modernization contract described in the approved requirements and approved technical specification
+* the newly generated target artifacts produced during forward engineering
+
+Return strict JSON only.
+
+Required top-level keys:
+
+* summary
+* differences
+* suggestions
+* confidence
+
+Objective:
+
+* Compare the generated target artifacts to the source business behavior described in the legacy specification.
+* Use the approved requirements and approved technical specification as the expected modernization contract.
+* Identify where the generated target is missing behavior, inconsistent with source logic, or deviates from the approved design.
+* Report only material validation findings that matter for delivery confidence.
+
+Strict output rules:
+
+* Return a single valid JSON object only.
+* Do not include markdown or prose outside JSON.
+* All list fields must be present even if empty.
+* Keep the response concise and focused on actionable mismatches.
+* Only report material differences.
+
+summary must include:
+
+* overall_status
+* sync_score
+* difference_count
+* suggestion_count
+* notes
+
+differences:
+
+* Array of objects with:
+  * title
+  * category
+  * severity
+  * source_expectation
+  * generated_behavior
+  * impacted_files
+  * recommendation
+
+suggestions:
+
+* Array of objects with:
+  * priority
+  * suggestion
+  * target_files
+  * rationale
+
+confidence must include:
+
+* validation_confidence
+* notes
+
+---
+
+## PRE-COMPARISON NORMALIZATION (MANDATORY)
+
+Before identifying any validation differences, you MUST normalize and canonicalize source expectations and generated behavior:
+
+1. Normalize syntax and structure:
+
+   * Treat equivalent implementations as the same even when file structure differs
+   * Ignore framework-specific or code-organization-only differences
+   * Ignore naming-only differences unless naming affects behavior, mapping, or integration
+
+2. Normalize terminology:
+
+   * Map different variable names to the same business meaning
+   * Standardize business concepts such as validation, pricing, tax, discount, workflow, persistence, compliance, and auditability
+
+3. Extract and enrich each expectation with:
+
+   * business capability
+   * rule_type
+   * business_intent
+   * validation dimension (functional parity, rule parity, workflow parity, compliance parity, data parity, or technical design parity)
+
+4. Create a canonical comparison identity for each expected behavior:
+   (business capability + rule_type + business_intent + validation dimension)
+
+---
+
+## SEMANTIC EQUIVALENCE LOGIC (CRITICAL)
+
+The generated target MUST NOT be reported as different if:
+
+* Business intent is the same
+* Material behavior is the same
+* Approved design intent is preserved
+
+Treat generated behavior as EQUIVALENT if differences are only:
+
+* Syntax differences
+* File structure differences
+* Naming differences
+* Framework or implementation-style differences
+* Non-material decomposition across multiple files
+
+Treat generated behavior as DIFFERENT only if:
+
+* Required logic is missing
+* Formula or threshold materially differs
+* Validation behavior differs
+* Workflow sequencing differs
+* Persistence behavior differs
+* Compliance or audit behavior differs
+* Approved technical design intent is not reflected
+
+---
+
+## VALIDATION DECISION LOGIC
+
+For each important source expectation:
+
+1. Find the matching generated implementation or evidence in generated files
+2. Compare it against:
+
+   * legacy source behavior
+   * approved requirements
+   * approved technical specification
+
+3. If generated implementation is materially aligned:
+
+   * DO NOT report it as a difference
+
+4. If generated implementation is missing, partial, or materially different:
+
+   * Add an item to differences
+   * Add a targeted remediation item to suggestions when useful
+
+---
+
+## FALSE POSITIVE PREVENTION (HIGH PRIORITY)
+
+DO NOT report a difference if:
+
+* Equivalent behavior exists in the generated target
+* Differences are only structural or cosmetic
+* The generated target preserves the approved modernization intent even if implementation differs
+
+When uncertain:
+
+* Prefer not reporting a difference unless the mismatch is material
+* Use notes to explain uncertainty
+
+---
+
+## VALIDATION FOCUS
+
+Compare across:
+
+* business capabilities
+* workflow and lifecycle handling
+* validations
+* calculations
+* discounts
+* risk logic
+* tax logic
+* persistence behavior
+* exception handling
+* compliance controls
+* auditability
+* traceability to approved requirements
+* traceability to approved technical design
+
+---
+
+## FIELD EXPECTATIONS
+
+summary:
+
+* overall_status should be one of:
+  * aligned
+  * partially_aligned
+  * not_aligned
+* sync_score must be a numeric decimal between 0.0 and 1.0
+* difference_count must equal the number of reported difference items
+* suggestion_count must equal the number of reported suggestion items
+* notes should explain high-level findings, assumptions, or important caveats
+
+differences:
+
+* Only include material mismatches
+* Each item should describe:
+  * what the source/approved expectation is
+  * what the generated behavior currently does
+  * which generated files appear impacted
+  * what should be corrected
+
+suggestions:
+
+* Keep suggestions practical and file-oriented where possible
+* Prioritize the highest-value corrections first
+
+---
+
+## FORMULA AND RULE HANDLING
+
+* Always include precise formula or rule behavior when available
+* If exact formula is unavailable, provide the best reconstructed behavior
+* Avoid vague summaries when rule-level evidence exists
+
+---
+
+## QUALITY CONTROL
+
+Before finalizing output, validate:
+
+* No duplicate validation findings for the same underlying issue
+* No differences based only on syntax or naming
+* All reported differences are materially meaningful
+* Suggestions are actionable and tied to the generated output
+* Summary counts match the actual reported arrays
+
+---
+
+## CONFIDENCE OBJECT
+
+confidence must include:
+
+* validation_confidence (numeric decimal between 0.0 and 1.0)
+* notes (explain assumptions, uncertainties, and coverage limits)
+
+---
+
+Payload:
+{payload}

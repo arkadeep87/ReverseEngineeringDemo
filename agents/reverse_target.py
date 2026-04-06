@@ -24,7 +24,7 @@ def run(target_folder: str, artifact_kind: str, logger) -> dict:
     )
     payload = {"system_name": "Target Insurance System", "artifact_kind": artifact_kind, **folder_data}
     cache = AgentCache(settings.cache_dir)
-    cache_key = f"reverse_target_{artifact_kind}"
+    cache_key = f"reverse_target_{artifact_kind}_v2"
 
     if settings.cache_enabled:
         cached = cache.load(cache_key, payload)

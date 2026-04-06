@@ -163,7 +163,15 @@ def gap_node(state: AppState) -> AppState:
     if state.get("gap_analysis"):
         append_log(state, "gap", "Gap analysis reused from current session state.")
         return {"gap_analysis": state["gap_analysis"], "logs": state["logs"]}
-    result = gap.run(state["legacy_spec"], state["target_spec"], lambda a, m: append_log(state, a, m))
+    result = gap.run(
+        state["legacy_spec"],
+        state["target_spec"],
+        state["legacy_code_reverse_spec"],
+        state["legacy_sql_reverse_spec"],
+        state["target_code_reverse_spec"],
+        state["target_sql_reverse_spec"],
+        lambda a, m: append_log(state, a, m),
+    )
     return {"gap_analysis": result, "logs": state["logs"]}
 
 
@@ -327,6 +335,47 @@ def stream_workflow(
         for _node_name, update in chunk.items():
             state.update(update)
         yield deepcopy(state)
+
+
+def stream_resume_from_requirements_approval(
+    prior_state: AppState | None,
+    approved_requirements: dict,
+) -> Iterator[AppState]:
+    state: AppState = deepcopy(prior_state) if prior_state else {}
+    state.setdefault("logs", [])
+    state["approved_requirements"] = approved_requirements
+    state["requirements_draft"] = approved_requirements
+    state.pop("approved_technical_spec", None)
+    state.pop("technical_spec_draft", None)
+    state.pop("forward_engineering_output", None)
+    yield deepcopy(state)
+
+    technical_spec_update = technical_spec_node(state)
+    state.update(technical_spec_update)
+    yield deepcopy(state)
+
+    forward_engineering_update = forward_engineering_node(state)
+    state.update(forward_engineering_update)
+    yield deepcopy(state)
+
+
+def stream_resume_from_technical_spec_approval(
+    prior_state: AppState | None,
+    approved_requirements: dict,
+    approved_technical_spec: dict,
+) -> Iterator[AppState]:
+    state: AppState = deepcopy(prior_state) if prior_state else {}
+    state.setdefault("logs", [])
+    state["approved_requirements"] = approved_requirements
+    state["requirements_draft"] = approved_requirements
+    state["approved_technical_spec"] = approved_technical_spec
+    state["technical_spec_draft"] = approved_technical_spec
+    state.pop("forward_engineering_output", None)
+    yield deepcopy(state)
+
+    forward_engineering_update = forward_engineering_node(state)
+    state.update(forward_engineering_update)
+    yield deepcopy(state)
 
 
 def run_workflow(
