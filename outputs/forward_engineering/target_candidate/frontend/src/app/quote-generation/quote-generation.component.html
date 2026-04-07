@@ -1,0 +1,62 @@
+<section class="quote-generation">
+  <h2>Spain Quote Generation</h2>
+  <form [formGroup]="form" (ngSubmit)="submit()">
+    <label>
+      Customer Id
+      <input type="text" formControlName="customerId" />
+    </label>
+
+    <label>
+      Age
+      <input type="number" formControlName="age" />
+    </label>
+
+    <label>
+      Policy Type
+      <select formControlName="policyType">
+        <option value="HEALTH">Health</option>
+        <option value="TRAVEL">Travel</option>
+        <option value="FAMILY">Family</option>
+        <option value="CORPORATE">Corporate</option>
+      </select>
+    </label>
+
+    <label>
+      Coverage Amount
+      <input type="number" formControlName="coverageAmount" />
+    </label>
+
+    <label>
+      Customer Segment
+      <select formControlName="customerSegment">
+        <option value="STANDARD">Standard</option>
+        <option value="LOYALTY_GOLD">Loyalty Gold</option>
+        <option value="EMPLOYEE">Employee</option>
+      </select>
+    </label>
+
+    <label>
+      Payment Frequency
+      <select formControlName="paymentFrequency">
+        <option value="MONTHLY">Monthly</option>
+        <option value="QUARTERLY">Quarterly</option>
+        <option value="ANNUAL">Annual</option>
+      </select>
+    </label>
+
+    <label>
+      <input type="checkbox" formControlName="gdprConsentGranted" />
+      GDPR consent confirmed
+    </label>
+
+    <button type="submit">Generate Quote</button>
+  </form>
+
+  <article *ngIf="result">
+    <h3>Quote Result</h3>
+    <p>Quote Id: {{ result.quoteId }}</p>
+    <p>Final Premium: {{ result.pricing.finalPremium }}</p>
+    <p>Spain Adjustment: {{ result.pricing.countryAdjustmentAmount }}</p>
+    <p>{{ result.auditMessage }}</p>
+  </article>
+</section>
