@@ -3,8 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - runtime fallback
+    pd = None
+
 
 SUPPORTED_SUFFIXES = {
+    ".csv",
+    ".xls",
+    ".xlsx",
     ".txt",
     ".md",
     ".json",
@@ -22,7 +30,50 @@ SUPPORTED_SUFFIXES = {
 }
 
 
+def read_spreadsheet_file(path: Path, max_chars: int) -> dict:
+    if pd is None:
+        return {
+            "path": str(path),
+            "name": path.name,
+            "content": "",
+            "encoding": None,
+            "truncated": False,
+            "error": "pandas is required to read spreadsheet files.",
+        }
+
+    try:
+        workbook = pd.read_excel(path, sheet_name=None)
+    except Exception as exc:  # pragma: no cover - parser/library failures
+        return {
+            "path": str(path),
+            "name": path.name,
+            "content": "",
+            "encoding": None,
+            "truncated": False,
+            "error": f"Unable to read spreadsheet: {exc}",
+        }
+
+    sections: list[str] = []
+    for sheet_name, dataframe in workbook.items():
+        safe_dataframe = dataframe.fillna("")
+        sections.append(f"[Sheet: {sheet_name}]")
+        sections.append(safe_dataframe.to_csv(index=False).strip())
+
+    content = "\n\n".join(section for section in sections if section)
+    return {
+        "path": str(path),
+        "name": path.name,
+        "content": content[:max_chars],
+        "encoding": "spreadsheet",
+        "truncated": len(content) > max_chars,
+        "error": None,
+    }
+
+
 def read_text_file(path: Path, max_chars: int) -> dict:
+    if path.suffix.lower() in {".xls", ".xlsx"}:
+        return read_spreadsheet_file(path, max_chars=max_chars)
+
     encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1"]
     for encoding in encodings:
         try:

@@ -1,12 +1,13 @@
-You are a senior business analyst and insurance domain expert.
+You are a senior business analyst, insurance domain consultant, and BRD author.
 
-Your task is to generate a DRAFT business requirements document based on:
+Your task is to generate a DRAFT business requirements document for real-world stakeholder review based on:
 1. legacy system specification
 2. target system specification
 3. gap analysis
 
 This output is not final.
 It must be prepared for SME review and approval.
+It should read like a professional BRD that could be shared with business stakeholders, delivery leads, compliance reviewers, and implementation teams.
 
 LEGACY SPEC:
 {legacy}
@@ -119,4 +120,26 @@ Rules:
 - Write requirement titles and descriptions in a concrete requirement style, for example `Spain quote pricing shall follow the approved Spain pricing model`, rather than generic modernization wording.
 - If multiple rule types are missing for the same country, either capture them in one detailed country requirement or create multiple country-specific requirements so the downstream design can implement them precisely.
 - Make the acceptance criteria country-aware and testable, so an SME can confirm what must happen for Spain, Portugal, Italy, Germany, the United Kingdom, Switzerland, or any other country found in the inputs.
+- Write the business_context as polished business prose, not terse notes. It should summarize the modernization objective, current-state issues, target-state intent, operational impact, and why the initiative matters.
+- Every functional requirement must feel implementation-ready from a business perspective: title, requirement statement, rationale, source gap, and measurable acceptance criteria.
+- Write requirement descriptions in formal BRD language using business wording such as `The system shall...`, `The solution shall...`, or `The process shall...`.
+- Do not write placeholder or generic requirement text such as `support country-specific logic` unless the exact behavior is genuinely unknown.
+- For each functional requirement, explain the expected business outcome and user or operational impact clearly enough for SME approval.
+- Use professional requirement IDs:
+  - Functional requirements: `F001`, `F002`, `F003`, ...
+  - Non-functional requirements: `N001`, `N002`, ...
+  - Compliance requirements: `C001`, `C002`, ...
+  - Data requirements: `D001`, `D002`, ...
+  - UI requirements: `U001`, `U002`, ...
+  - API requirements: `A001`, `A002`, ...
+  - Migration requirements: `M001`, `M002`, ...
+- IDs must be uppercase and zero-padded to 3 digits.
+- Functional requirement titles should sound professional and business-facing, for example `Germany quote taxation shall apply approved insurance duty and statutory health surcharge rules`.
+- Include source_gap values that clearly describe the business gap being addressed.
+- For non-functional requirements, include service quality expectations such as auditability, maintainability, performance, resilience, traceability, and operational support where relevant.
+- For compliance requirements, clearly state the jurisdiction, control expectation, and business consequence of non-compliance.
+- For data requirements, describe data persistence, traceability, migration, and reporting needs in professional business language.
+- For UI, API, and migration requirements, focus on business intent and operational necessity rather than technical implementation detail.
+- The review_notes should read like real delivery notes to stakeholders, not generic filler.
+- The final document should feel complete, professional, and suitable for real project review without changing the JSON structure.
 - Return JSON only.

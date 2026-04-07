@@ -131,3 +131,41 @@ def normalize_validation_output(payload: dict[str, Any]) -> dict[str, Any]:
             "notes": ensure_list(confidence.get("notes")),
         },
     }
+
+
+def normalize_data_mapping_output(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary", {})
+    confidence = payload.get("confidence", {})
+    field_mappings = []
+    for item in ensure_list(payload.get("field_mappings")):
+        if isinstance(item, dict):
+            normalized_item = dict(item)
+            normalized_item["data_mapping_rule"] = normalized_item.get("data_mapping_rule") or normalized_item.get("transformation_logic", "")
+            field_mappings.append(normalized_item)
+        else:
+            field_mappings.append(item)
+    return {
+        "summary": {
+            "overall_mapping_status": summary.get("overall_mapping_status", "unknown"),
+            "mapping_coverage": ensure_float(summary.get("mapping_coverage", 0.0)),
+            "legacy_entities_reviewed": int(ensure_float(summary.get("legacy_entities_reviewed", 0))),
+            "final_entities_reviewed": int(ensure_float(summary.get("final_entities_reviewed", 0))),
+            "mapped_columns_count": int(ensure_float(summary.get("mapped_columns_count", 0))),
+            "unmapped_columns_count": int(ensure_float(summary.get("unmapped_columns_count", 0))),
+            "transformation_count": int(ensure_float(summary.get("transformation_count", 0))),
+            "reconciliation_rule_count": int(ensure_float(summary.get("reconciliation_rule_count", 0))),
+            "key_findings": ensure_list(summary.get("key_findings")),
+        },
+        "field_mappings": field_mappings,
+        "reconciliation_approach": ensure_list(payload.get("reconciliation_approach")),
+        "reference_data_mappings": ensure_list(payload.get("reference_data_mappings")),
+        "unmapped_legacy_fields": ensure_list(payload.get("unmapped_legacy_fields")),
+        "new_final_state_fields": ensure_list(payload.get("new_final_state_fields")),
+        "transformations": ensure_list(payload.get("transformations")),
+        "data_quality_risks": ensure_list(payload.get("data_quality_risks")),
+        "migration_notes": ensure_list(payload.get("migration_notes")),
+        "confidence": {
+            "mapping_confidence": ensure_float(confidence.get("mapping_confidence", 0.0)),
+            "notes": ensure_list(confidence.get("notes")),
+        },
+    }

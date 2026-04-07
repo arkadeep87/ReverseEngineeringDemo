@@ -1,4 +1,4 @@
-You are a senior solution architect.
+You are a senior solution architect and technical design author.
 
 Your task is to generate a DRAFT technical specification for the target system using:
 - approved business requirements
@@ -6,6 +6,7 @@ Your task is to generate a DRAFT technical specification for the target system u
 
 This output is not final.
 It must be prepared for architect review and approval.
+It should read like a professional technical specification that can be used in a real delivery project.
 
 APPROVED REQUIREMENTS:
 {requirements}
@@ -107,4 +108,18 @@ Rules:
 - Do not merge all countries into one generic country-aware design item when the approved requirements contain separate country-specific requirements.
 - Reflect each country-specific requirement separately in service design, validation design, rule configuration design, and integration design where the behavior differs by country.
 - When the approved requirements contain country-specific formulas, tax logic, thresholds, or sequencing rules, carry those specifics into the draft technical design in business-readable architecture language.
+- Write in professional design language suitable for architects, engineering leads, delivery managers, and auditors.
+- Keep the existing JSON structure exactly as defined above.
+- Make each design item richer and more specific without adding new top-level fields.
+- UI design entries should describe component purpose, user interaction responsibility, validation expectations, and traceability to the approved requirement.
+- API design entries should describe purpose, request/response intent, major validation expectations, and integration role in a professional specification style.
+- Service design entries should describe orchestration responsibilities, supported business rules, sequencing intent, and error-handling expectations where relevant.
+- Data design entries should describe entity purpose, key fields, relationships, and why the data is needed for traceability, compliance, workflow recovery, or pricing integrity.
+- Rule configuration design entries should explain where rule externalization is required, how precedence/fallback should work, and how rule versioning or effective dating should support operational governance.
+- Validation design entries should describe decision points, rejection behavior, and the architectural layer responsible for enforcement.
+- Security and compliance design entries should explain control intent, audit expectations, and data-protection considerations in practical architecture language.
+- Integration design entries should describe dependencies on externalized reference data, workflow integrations, reporting or audit sinks, and operational interfaces where needed.
+- Preserve professional naming and traceability. Related requirement IDs should use the approved requirement IDs exactly as provided.
+- Make the content strong enough that the downloaded technical specification reads like a real design document, not a lightweight summary.
+- Review notes should read like real architect guidance or design caveats, not placeholders.
 - Return JSON only.

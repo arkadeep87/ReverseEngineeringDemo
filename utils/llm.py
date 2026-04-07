@@ -79,7 +79,7 @@ def _extract_country_rule_context(legacy: dict, gap: dict) -> list[dict]:
         results.append(
             {
                 "country": country,
-                "requirement_id": f"FR-COUNTRY-{_slugify_identifier(country)}",
+                "requirement_id": f"F-COUNTRY-{_slugify_identifier(country)}",
                 "details": normalized_details,
             }
         )
@@ -394,7 +394,7 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
 
     functional_requirements = [
         {
-            "id": "FR-001",
+                "id": "F001",
             "title": "Preserve quote generation workflow parity",
             "description": "The target solution must preserve the end-to-end validation, pricing, and persistence workflow supported by the legacy system.",
             "priority": "High",
@@ -411,7 +411,7 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
     if missing_features:
         functional_requirements.append(
             {
-                "id": "FR-002",
+                "id": "F002",
                 "title": "Build missing legacy capabilities into the target solution",
                 "description": "All business capabilities identified as missing in the current target must be implemented in the modernized target solution.",
                 "priority": "High",
@@ -452,7 +452,7 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
         "functional_requirements": functional_requirements,
         "non_functional_requirements": [
             {
-                "id": "NFR-001",
+                "id": "N001",
                 "title": "Auditability",
                 "description": "The target implementation should preserve operational traceability for quote processing.",
                 "priority": "High",
@@ -460,7 +460,7 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
         ],
         "compliance_requirements": [
             {
-                "id": "CR-001",
+                "id": "C001",
                 "title": "Consent and regulatory controls",
                 "description": "The modernized flow must preserve consent and regional compliance controls called out in the gap analysis.",
                 "region": "EU",
@@ -469,7 +469,7 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
         ],
         "data_requirements": [
             {
-                "id": "DR-001",
+                "id": "D001",
                 "entity": "Quote",
                 "requirement": "Quote data must maintain canonical field parity between legacy and target systems.",
             }
@@ -483,14 +483,14 @@ def _build_mock_requirements_response(input_payload: dict) -> dict:
         ],
         "api_requirements": [
             {
-                "id": "APIR-001",
+                "id": "A001",
                 "api_name": "Quote Generation API",
                 "requirement": "APIs must support the approved quote-generation workflow and traceability expectations.",
             }
         ],
         "migration_requirements": [
             {
-                "id": "MR-001",
+                "id": "M001",
                 "requirement": "Country-specific rules and compliance-sensitive logic missing from the current target must be implemented for migration parity before release.",
             }
         ],
@@ -513,14 +513,14 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
     country_requirement_ids = [
         str(item.get("id", ""))
         for item in functional_requirements
-        if isinstance(item, dict) and str(item.get("id", "")).startswith("FR-COUNTRY")
+        if isinstance(item, dict) and "COUNTRY" in str(item.get("id", "")).upper()
     ]
 
     ui_design = [
         {
             "component": "QuoteGenerationComponent",
             "responsibility": "Capture quote inputs and submit approved quote-generation requests.",
-            "related_requirement_ids": ["FR-001"],
+            "related_requirement_ids": ["F001"],
         }
     ]
     service_design = [
@@ -528,7 +528,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
             "service_name": "QuoteWorkflowService",
             "responsibility": "Coordinate validation, pricing, compliance, and persistence.",
             "business_rules_supported": ["Validation before pricing", "Persist after successful validation"],
-            "related_requirement_ids": ["FR-001", "CR-001"],
+            "related_requirement_ids": ["F001", "C001"],
         }
     ]
     rule_configuration_design = [
@@ -536,7 +536,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
             "rule_area": "Country-specific pricing and compliance",
             "approach": "Externalize regional rules and validation thresholds where possible.",
             "details": "Support configuration-backed regional processing for modernization parity.",
-            "related_requirement_ids": ["MR-001", "CR-001"],
+            "related_requirement_ids": ["M001", "C001"],
         }
     ]
     validation_design = [
@@ -544,7 +544,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
             "validation_name": "Quote request validation",
             "logic": "Validate required fields and compliance preconditions before pricing execution.",
             "layer": "API",
-            "related_requirement_ids": ["FR-001", "CR-001"],
+            "related_requirement_ids": ["F001", "C001"],
         }
     ]
     integration_design = [
@@ -567,7 +567,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
                 "service_name": "CountryRuleOrchestrationService",
                 "responsibility": "Apply country-specific quote rules, adjustments, and validations based on approved business requirements.",
                 "business_rules_supported": ["Country-specific rule selection", "Country-specific pricing adjustments", "Country-specific validation handling"],
-                "related_requirement_ids": [*country_requirement_ids, "MR-001"],
+                "related_requirement_ids": [*country_requirement_ids, "M001"],
             }
         )
         rule_configuration_design.append(
@@ -605,7 +605,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
                 "path": "/api/v1/quotes/generate",
                 "request_fields": ["customer_id", "policy_type", "coverage_amount", "country_code"],
                 "response_fields": ["quote_id", "final_premium"],
-                "related_requirement_ids": ["FR-001", "APIR-001"],
+                "related_requirement_ids": ["F001", "A001"],
             }
         ],
         "service_design": service_design,
@@ -614,7 +614,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
                 "entity": "Quote",
                 "fields": ["quote_id", "customer_id", "policy_type", "coverage_amount", "final_premium"],
                 "relationships": ["Quote belongs to Customer"],
-                "related_requirement_ids": ["DR-001"],
+                "related_requirement_ids": ["D001"],
             }
         ],
         "rule_configuration_design": rule_configuration_design,
@@ -623,7 +623,7 @@ def _build_mock_technical_spec_response(input_payload: dict) -> dict:
             {
                 "area": "Consent and audit",
                 "design_decision": "Enforce compliance checks before persistence and log key workflow events.",
-                "related_requirement_ids": ["CR-001", "NFR-001"],
+                "related_requirement_ids": ["C001", "N001"],
             }
         ],
         "integration_design": integration_design,
@@ -646,14 +646,14 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
     country_requirement_ids = [
         str(item.get("id", ""))
         for item in functional_requirements
-        if isinstance(item, dict) and str(item.get("id", "")).startswith("FR-COUNTRY")
+        if isinstance(item, dict) and "COUNTRY" in str(item.get("id", "")).upper()
     ]
 
     angular_files = [
         {
             "file_name": "quote-generation.component.ts",
             "purpose": "Implements the approved quote-generation UI flow.",
-            "related_requirement_ids": ["FR-001"],
+            "related_requirement_ids": ["F001"],
             "content": "// Mock Angular implementation artifact",
         }
     ]
@@ -661,7 +661,7 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
         {
             "file_name": "quote-workflow.service.js",
             "purpose": "Implements the approved orchestration flow.",
-            "related_requirement_ids": ["FR-001", "CR-001"],
+            "related_requirement_ids": ["F001", "C001"],
             "content": "// Mock Node.js implementation artifact",
         }
     ]
@@ -669,7 +669,7 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
         {
             "file_name": "quote_workflow.sql",
             "purpose": "Supports approved persistence and rule behavior.",
-            "related_requirement_ids": ["DR-001"],
+            "related_requirement_ids": ["D001"],
             "content": "-- Mock PostgreSQL implementation artifact",
         }
     ]
@@ -677,19 +677,19 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
         {
             "id": "TC-001",
             "title": "Validate quote generation happy path",
-            "related_requirement_ids": ["FR-001"],
+            "related_requirement_ids": ["F001"],
             "type": "Integration",
             "scenario": "Submit a valid quote request and verify validation, pricing, and persistence complete successfully.",
         }
     ]
-    traceability_summary = ["FR-001 traced across UI, API, and persistence artifacts."]
+    traceability_summary = ["F001 traced across UI, API, and persistence artifacts."]
 
     if country_requirement_ids:
         nodejs_files.append(
             {
                 "file_name": "country-rule-orchestration.service.js",
                 "purpose": "Implements country-specific rule handling required by approved modernization scope.",
-                "related_requirement_ids": [*country_requirement_ids, "MR-001"],
+                "related_requirement_ids": [*country_requirement_ids, "M001"],
                 "content": "// Mock Node.js country-specific implementation artifact",
             }
         )
@@ -777,6 +777,114 @@ def _build_mock_validation_response(input_payload: dict) -> dict:
     }
 
 
+def _build_mock_data_mapping_response(input_payload: dict) -> dict:
+    return {
+        "summary": {
+            "overall_mapping_status": "partially_aligned",
+            "mapping_coverage": 0.78,
+            "legacy_entities_reviewed": 6,
+            "final_entities_reviewed": 9,
+            "mapped_columns_count": 18,
+            "unmapped_columns_count": 4,
+            "transformation_count": 5,
+            "reconciliation_rule_count": 4,
+            "key_findings": [
+                "Core quote persistence fields are mapped into the final design.",
+                "Final-state design introduces additional audit, eligibility, and rule-trace fields.",
+                "Some legacy fields require transformation or remain unmapped in the generated target.",
+            ],
+        },
+        "field_mappings": [
+            {
+                "legacy_entity": "quote_context",
+                "legacy_field": "tax_amount",
+                "initial_target_entity": "quotes",
+                "initial_target_field": "tax_amount",
+                "final_target_entity": "quotes",
+                "final_target_field": "tax_amount",
+                "mapping_type": "direct",
+                "transformation_logic": "Persist tax amount as calculated by final pricing service.",
+                "required_for_migration": True,
+                "notes": "Field remains part of the premium outcome record.",
+                "evidence": {
+                    "legacy": ["quote_context.tax_amount"],
+                    "initial_target": ["quotes.tax_amount"],
+                    "final_target": ["generated quotes.tax_amount"],
+                },
+            }
+        ],
+        "reconciliation_approach": [
+            {
+                "reconciliation_area": "Quote financial outcome",
+                "source_dataset": "legacy quote_context and quote line outputs",
+                "target_dataset": "final quotes and financial breakdown outputs",
+                "match_key": ["quote_id", "customer_id"],
+                "reconciliation_rule": "Reconcile base premium, tax amount, country adjustment amount, and final premium by quote.",
+                "comparison_method": "Exact comparison for identifiers and rounded numeric comparison for financial values.",
+                "tolerance_or_threshold": "0.01 for monetary amounts",
+                "exception_handling": "Route mismatches to migration defect triage with pricing-rule evidence.",
+                "notes": "Required for premium migration assurance and pricing parity review.",
+            }
+        ],
+        "reference_data_mappings": [
+            {
+                "legacy_reference_source": "country_tax_rules",
+                "initial_target_reference_source": "pricing_functions / target pricing lookup",
+                "final_target_reference_source": "tax_rule",
+                "mapping_summary": "Legacy country tax reference data is externalized into final-state tax rule records with rule versioning.",
+                "evidence": {
+                    "legacy": ["country_tax_rules"],
+                    "initial_target": ["target pricing lookup"],
+                    "final_target": ["tax_rule generated table"],
+                },
+            }
+        ],
+        "unmapped_legacy_fields": [
+            {
+                "legacy_entity": "quote_line_item",
+                "legacy_field": "source_table",
+                "reason": "Equivalent provenance field is not clearly represented in the final quote charge persistence path.",
+                "recommended_action": "Add explicit lineage or source-of-rule metadata to final financial breakdown persistence.",
+            }
+        ],
+        "new_final_state_fields": [
+            {
+                "final_target_entity": "quotes",
+                "final_target_field": "tax_rule_version",
+                "purpose": "Records which configured tax rule version produced the final tax value.",
+                "source_of_value": "Final pricing service rule version summary.",
+                "migration_impact": "New governance field; populate only for final-state generated records unless backfill is required.",
+            }
+        ],
+        "transformations": [
+            {
+                "name": "Country tax externalization",
+                "source_fields": ["country_tax_rules.tax_rate", "quote_context.country_code", "quote_context.policy_type"],
+                "target_fields": ["tax_rule.tax_rate", "quotes.tax_amount", "quotes.tax_rule_version"],
+                "logic": "Lookup and apply prioritized tax rule by country and policy type, then persist both value and rule version.",
+                "implementation_location": ["pricing.service.js", "rules.repository.js", "002_reference_seed.sql"],
+                "business_purpose": "Improve traceability and configurability of country-specific taxation.",
+            }
+        ],
+        "data_quality_risks": [
+            {
+                "risk": "Some legacy lineage and charge detail fields are not explicitly mapped into final persistence artifacts.",
+                "severity": "medium",
+                "impact": "Migration reconciliation and audit support may require additional metadata.",
+                "recommendation": "Add explicit lineage fields or strengthen financial breakdown persistence.",
+            }
+        ],
+        "migration_notes": [
+            "Backfill strategy may be required for newly introduced rule-version and eligibility-trace fields.",
+            "Reference data migration should preserve effective dating and priority ordering.",
+        ],
+        "confidence": {
+            "mapping_confidence": 0.8,
+            "notes": ["Mock data mapping output generated without live LLM execution."],
+        },
+    }
+
+
 def _build_mock_response(agent_name: str, input_payload: dict) -> dict:
     system_name = input_payload.get("system_name", agent_name)
     file_names = [item.get("name", "unknown") for item in input_payload.get("files", [])]
@@ -803,6 +911,9 @@ def _build_mock_response(agent_name: str, input_payload: dict) -> dict:
 
     if agent_name == "validation":
         return _build_mock_validation_response(input_payload)
+
+    if agent_name == "data_mapping":
+        return _build_mock_data_mapping_response(input_payload)
 
     return {
         "missing_features": [

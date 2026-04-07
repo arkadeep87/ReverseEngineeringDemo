@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any
 
 from config import settings
@@ -44,6 +45,37 @@ def _default_requirements_draft() -> dict[str, Any]:
     }
 
 
+def _normalize_requirement_id(raw_id: Any, prefix: str, index: int) -> str:
+    candidate = str(raw_id or "").strip().upper()
+    preferred = f"{prefix}{index:03d}"
+    if not candidate:
+        return preferred
+
+    match = re.search(r"(\d+)", candidate)
+    if not match:
+        return preferred
+    return f"{prefix}{int(match.group(1)):03d}"
+
+
+def _normalize_requirement_collection(items: list[Any], prefix: str, key_fields: list[str] | None = None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            text = str(item).strip()
+            if not text:
+                continue
+            normalized.append({"id": f"{prefix}{index:03d}", "title": text})
+            continue
+
+        normalized_item = dict(item)
+        normalized_item["id"] = _normalize_requirement_id(normalized_item.get("id"), prefix, index)
+        if key_fields:
+            for field in key_fields:
+                normalized_item.setdefault(field, "")
+        normalized.append(normalized_item)
+    return normalized
+
+
 def _normalize_requirements_draft(payload: dict[str, Any]) -> dict[str, Any]:
     default = _default_requirements_draft()
     approval = payload.get("approval", {})
@@ -52,13 +84,41 @@ def _normalize_requirements_draft(payload: dict[str, Any]) -> dict[str, Any]:
             "document_type": payload.get("document_type", default["document_type"]),
             "screen_name": payload.get("screen_name", ""),
             "business_context": payload.get("business_context", ""),
-            "functional_requirements": ensure_list(payload.get("functional_requirements")),
-            "non_functional_requirements": ensure_list(payload.get("non_functional_requirements")),
-            "compliance_requirements": ensure_list(payload.get("compliance_requirements")),
-            "data_requirements": ensure_list(payload.get("data_requirements")),
-            "ui_requirements": ensure_list(payload.get("ui_requirements")),
-            "api_requirements": ensure_list(payload.get("api_requirements")),
-            "migration_requirements": ensure_list(payload.get("migration_requirements")),
+            "functional_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("functional_requirements")),
+                "F",
+                ["title", "description", "priority", "rationale", "source_gap", "acceptance_criteria"],
+            ),
+            "non_functional_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("non_functional_requirements")),
+                "N",
+                ["title", "description", "priority"],
+            ),
+            "compliance_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("compliance_requirements")),
+                "C",
+                ["title", "description", "region", "priority"],
+            ),
+            "data_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("data_requirements")),
+                "D",
+                ["entity", "requirement"],
+            ),
+            "ui_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("ui_requirements")),
+                "U",
+                ["field_or_component", "requirement"],
+            ),
+            "api_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("api_requirements")),
+                "A",
+                ["api_name", "requirement"],
+            ),
+            "migration_requirements": _normalize_requirement_collection(
+                ensure_list(payload.get("migration_requirements")),
+                "M",
+                ["requirement"],
+            ),
             "assumptions": ensure_list(payload.get("assumptions")),
             "open_questions_for_sme": ensure_list(payload.get("open_questions_for_sme")),
             "review_notes": ensure_list(payload.get("review_notes")) or default["review_notes"],

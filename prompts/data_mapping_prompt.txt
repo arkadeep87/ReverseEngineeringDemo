@@ -1,0 +1,243 @@
+You are an enterprise modernisation data architecture analyst.
+
+Read the provided source data dictionary, target data dictionary, source and target application specifications, and the reverse-engineered final design created after forward engineering.
+
+Your task is to produce a migration-ready data mapping assessment for the final design.
+
+The primary goal is to produce:
+- data column mapping from legacy to final forward-engineered state
+- transformation logic required to populate the final state
+- reconciliation approach for validating migrated data after migration
+
+The final design created after forward engineering is the target state of record.
+
+LEGACY SPEC:
+{legacy_spec}
+
+INITIAL TARGET SPEC:
+{target_spec}
+
+FORWARD-ENGINEERED TARGET CODE REVERSE SPEC:
+{forward_engineered_code_reverse_spec}
+
+FORWARD-ENGINEERED TARGET SQL REVERSE SPEC:
+{forward_engineered_sql_reverse_spec}
+
+FORWARD-ENGINEERED TARGET COLLATED SPEC:
+{forward_engineered_target_spec}
+
+LEGACY DATA DICTIONARY:
+{legacy_data_dictionary}
+
+INITIAL TARGET DATA DICTIONARY:
+{target_data_dictionary}
+
+Return STRICT JSON only in the following structure:
+
+{
+  "summary": {
+    "overall_mapping_status": "aligned/partially_aligned/misaligned",
+    "mapping_coverage": 0.0,
+    "legacy_entities_reviewed": 0,
+    "final_entities_reviewed": 0,
+    "mapped_columns_count": 0,
+    "unmapped_columns_count": 0,
+    "transformation_count": 0,
+    "reconciliation_rule_count": 0,
+    "key_findings": []
+  },
+  "field_mappings": [
+    {
+      "legacy_entity": "",
+      "legacy_field": "",
+      "initial_target_entity": "",
+      "initial_target_field": "",
+      "final_target_entity": "",
+      "final_target_field": "",
+      "mapping_type": "direct/transformed/derived/defaulted/new_final_state/unmapped",
+      "migration_status": "CARRIED_OVER/RENAMED/TYPE_CHANGED/NEW/KEY_CHANGED/UNMAPPED",
+      "change_category": "STRUCTURAL/COMPLIANCE/TECHNICAL/NONE",
+      "source_data_type": "",
+      "initial_target_data_type": "",
+      "final_target_data_type": "",
+      "data_source": "HARDCODED/<table_name>/<function_name>",
+      "allowed_values": [],
+      "data_mapping_rule": "",
+      "required_for_migration": true,
+      "notes": "",
+      "evidence": {
+        "legacy": [],
+        "initial_target": [],
+        "final_target": []
+      }
+    }
+  ],
+  "reconciliation_approach": [
+    {
+      "reconciliation_area": "",
+      "source_dataset": "",
+      "target_dataset": "",
+      "match_key": [],
+      "reconciliation_rule": "",
+      "comparison_method": "",
+      "tolerance_or_threshold": "",
+      "exception_handling": "",
+      "notes": ""
+    }
+  ],
+  "reference_data_mappings": [
+    {
+      "legacy_reference_source": "",
+      "initial_target_reference_source": "",
+      "final_target_reference_source": "",
+      "mapping_summary": "",
+      "evidence": {
+        "legacy": [],
+        "initial_target": [],
+        "final_target": []
+      }
+    }
+  ],
+  "unmapped_legacy_fields": [
+    {
+      "legacy_entity": "",
+      "legacy_field": "",
+      "reason": "",
+      "recommended_action": ""
+    }
+  ],
+  "new_final_state_fields": [
+    {
+      "final_target_entity": "",
+      "final_target_field": "",
+      "purpose": "",
+      "source_of_value": "",
+      "migration_impact": ""
+    }
+  ],
+  "transformations": [
+    {
+      "name": "",
+      "source_fields": [],
+      "target_fields": [],
+      "logic": "",
+      "implementation_location": [],
+      "business_purpose": ""
+    }
+  ],
+  "data_quality_risks": [
+    {
+      "risk": "",
+      "severity": "high/medium/low",
+      "impact": "",
+      "recommendation": ""
+    }
+  ],
+  "migration_notes": [],
+  "confidence": {
+    "mapping_confidence": 0.0,
+    "notes": []
+  }
+}
+
+Rules:
+- Focus on the final forward-engineered state as the primary target for mapping.
+- Use the initial target specification and initial target data dictionary as comparison context, not as the final source of truth.
+- Reverse-engineered forward-engineered output and generated SQL/code evidence must be used when available.
+- Produce evidence-based mappings only. Do not invent tables or fields that are not grounded in the inputs.
+- Make the mapping professionally useful for migration planning and design assurance.
+- Make column mapping the centerpiece of the output.
+- Prefer one row per important legacy-to-final column mapping wherever practical.
+- Reconciliation approach must be practical for migration execution, not generic advice.
+- Include reconciliation guidance for core business entities, financial outputs, consent/compliance data, rule-driven values, and audit/underwriting records where relevant.
+- Cross-reference source dictionary, initial target dictionary, legacy spec, target spec, reverse-engineered final code, reverse-engineered final SQL, and forward-engineered final collated spec together before deciding mappings.
+- Normalise terminology, data types, and key strategies so equivalent concepts are aligned even when naming differs.
+- Infer migration intent and classify structural changes such as rename, merge, split, type promotion, key strategy change, compliance addition, column removal, denormalisation, and stored-procedure promotion.
+- Align all field descriptions to business-readable language that a migration architect or business analyst can review.
+- Prepare the output so it can support downstream semantic gap analysis, lineage tracing, and migration planning.
+- Distinguish clearly between:
+  - fields directly carried forward
+  - fields transformed or renamed
+  - fields newly introduced in the final design
+  - fields not represented in the final design
+- Prefer explicit entity and field names over vague descriptions.
+- When a field appears to be derived or split across multiple final-state fields, explain the transformation logic and implementation location.
+- Reference data, lookup tables, tax catalogs, rule tables, consent records, workflow state tables, and audit tables should be treated as important mapping artifacts.
+- If the final design introduces governance or traceability fields such as rule versions, audit metadata, eligibility results, underwriting identifiers, or breakdown components, capture them in new_final_state_fields.
+- For field mappings, explicitly state whether each field is direct, transformed, derived, defaulted, or unmapped.
+- For each field mapping, use `data_mapping_rule` to explain how the final target field is populated from source or derived logic.
+- For transformation logic, identify source fields, target fields, logic, and where that logic is implemented in the final design.
+- For reconciliation, define dataset pairs, business keys, comparison method, tolerance, and exception handling.
+- Every important final-state table and every important migration-relevant target column should be represented through field mappings, reference-data mappings, new final-state fields, or reconciliation rules. Do not omit major structures.
+- Read service, repository, API contract, model, DTO, pricing, validation, workflow, and schema artifacts to confirm actual field semantics and computed-column meaning.
+- Extract and preserve allowed values where they are explicitly known from dictionaries, schemas, API contracts, models, or code.
+- Use migration notes normalisation:
+  - Rename: `Renamed from <source_column>`
+  - Type change: `Type changed from <source_type> to <target_type>`
+  - New column: `New column. <reason>`
+  - Key strategy: `PK strategy changed from <old> to <new>`
+  - Computed: `Computed via <function_name>; replaces <source_logic>`
+  - Unchanged: use `null` semantics in notes where no change is needed; do not use empty-string placeholders
+- Collapse duplicates across DDL, repositories, APIs, and models into one canonical mapping row per column concept wherever possible.
+- Source traceability matters. Use the evidence sections to cite files, functions, tables, or artifacts where the mapping or transformation is grounded.
+- Numeric values must be JSON numbers, booleans must be JSON booleans, and absent values must be JSON null semantics where appropriate.
+- Self-check before returning:
+  - mapped and unmapped counts should agree with the listed rows
+  - transformation count should match the transformations array length
+  - reconciliation rule count should match the reconciliation_approach array length
+  - new final-state fields should only include fields with no true legacy equivalent
+  - unmapped legacy fields should contain only fields not represented in the final state
+- Keep output concise but specific enough for real migration design review.
+- Example format guidance only. Do not copy values unless they are supported by the inputs:
+  {
+    "field_mappings": [
+      {
+        "legacy_entity": "quote_context",
+        "legacy_field": "tax_amount",
+        "initial_target_entity": "quotes",
+        "initial_target_field": "tax_amount",
+        "final_target_entity": "quotes",
+        "final_target_field": "tax_amount",
+        "mapping_type": "direct",
+        "migration_status": "CARRIED_OVER",
+        "change_category": "NONE",
+        "source_data_type": "NUMERIC(12,2)",
+        "initial_target_data_type": "numeric(12,2)",
+        "final_target_data_type": "numeric(18,2)",
+        "data_source": "tax_rule",
+        "allowed_values": null,
+        "data_mapping_rule": "Persist calculated tax amount returned by final pricing flow.",
+        "required_for_migration": true,
+        "notes": null,
+        "evidence": {
+          "legacy": ["legacy_quote_schema.sybase.sql", "QuoteRepository.vb"],
+          "initial_target": ["schema.postgresql.sql"],
+          "final_target": ["001_quote_schema.sql", "pricing.service.js"]
+        }
+      }
+    ],
+    "transformations": [
+      {
+        "name": "Country tax externalization",
+        "source_fields": ["country_tax_rules.tax_rate", "quote_context.country_code", "quote_context.policy_type"],
+        "target_fields": ["tax_rule.tax_rate", "quotes.tax_amount", "quotes.tax_rule_version"],
+        "logic": "Lookup prioritized tax rule by country and policy type and persist both the tax value and rule version.",
+        "implementation_location": ["rules.repository.js", "pricing.service.js", "002_reference_seed.sql"],
+        "business_purpose": "Provide configurable and traceable tax calculation in the final-state design."
+      }
+    ],
+    "reconciliation_approach": [
+      {
+        "reconciliation_area": "Quote financial outcome",
+        "source_dataset": "legacy quote_context and quote line outputs",
+        "target_dataset": "final quotes and financial breakdown outputs",
+        "match_key": ["quote_id", "customer_id"],
+        "reconciliation_rule": "Compare base premium, tax amount, country adjustment amount, and final premium by migrated quote.",
+        "comparison_method": "Exact match for keys and rounded numeric comparison for financial fields.",
+        "tolerance_or_threshold": "0.01 for monetary values",
+        "exception_handling": "Send mismatches to migration defect triage with pricing-rule evidence.",
+        "notes": "Use for post-load reconciliation and migration sign-off."
+      }
+    ]
+  }
+- Return JSON only.

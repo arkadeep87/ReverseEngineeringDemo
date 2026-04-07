@@ -12,8 +12,19 @@ import pandas as pd
 import streamlit as st
 try:
     from docx import Document
+    from docx.enum.section import WD_SECTION
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt
 except ImportError:  # pragma: no cover - runtime fallback
     Document = None
+    WD_SECTION = None
+    WD_ALIGN_PARAGRAPH = None
+    OxmlElement = None
+    qn = None
+    Inches = None
+    Pt = None
 try:
     import openpyxl  # noqa: F401
 except ImportError:  # pragma: no cover - runtime fallback
@@ -33,6 +44,7 @@ from graph import (
     stream_workflow,
 )
 from utils.cache import AgentCache
+from agents import data_mapping as data_mapping_agent
 from agents import validation as validation_agent
 
 
@@ -49,9 +61,19 @@ MODEL_OPTIONS = [
     "gpt-5-mini",
     "gpt-5",
     "gpt-4o-mini",
-    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-6",
     "claude-opus-4-1-20250805",
 ]
+
+MODEL_LABELS = {
+    "gpt-5.4-mini": "GPT-5.4 Mini",
+    "gpt-5.4": "GPT-5.4",
+    "gpt-5-mini": "GPT-5 Mini",
+    "gpt-5": "GPT-5",
+    "gpt-4o-mini": "GPT-4o Mini",
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "claude-opus-4-1-20250805": "Claude Opus 4.1",
+}
 
 WORKFLOW_PHASES = [
     ("reverse_legacy", "Analyzing legacy VB and SQL files"),
@@ -323,6 +345,7 @@ def build_workflow_excel_export(result: dict) -> bytes | None:
             {"step": "Requirements Draft", "available": bool(result.get("requirements_draft")), "type": "requirements"},
             {"step": "Technical Spec Draft", "available": bool(result.get("technical_spec_draft")), "type": "technical_spec"},
             {"step": "Forward Engineering", "available": bool(result.get("forward_engineering_output")), "type": "forward_engineering"},
+            {"step": "Final Data Mapping", "available": bool(result.get("data_mapping_result")), "type": "data_mapping"},
             {"step": "Validation", "available": bool(result.get("validation_result")), "type": "validation"},
         ]
         pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Run Summary", index=False)
@@ -439,11 +462,30 @@ def build_workflow_excel_export(result: dict) -> bytes | None:
                 ],
             )
 
+        data_mapping_result = result.get("data_mapping_result", {})
+        if data_mapping_result:
+            write_sectioned_excel_sheet(
+                writer,
+                "11 Final Data Mapping",
+                [
+                    ("Summary", data_mapping_result.get("mapping_analysis", {}).get("summary", {})),
+                    ("Field Mappings", format_data_mapping_field_rows(data_mapping_result.get("mapping_analysis", {}).get("field_mappings", []))),
+                    ("Reconciliation Approach", data_mapping_result.get("mapping_analysis", {}).get("reconciliation_approach", [])),
+                    ("Reference Data Mappings", data_mapping_result.get("mapping_analysis", {}).get("reference_data_mappings", [])),
+                    ("Unmapped Legacy Fields", data_mapping_result.get("mapping_analysis", {}).get("unmapped_legacy_fields", [])),
+                    ("New Final State Fields", data_mapping_result.get("mapping_analysis", {}).get("new_final_state_fields", [])),
+                    ("Transformations", data_mapping_result.get("mapping_analysis", {}).get("transformations", [])),
+                    ("Data Quality Risks", data_mapping_result.get("mapping_analysis", {}).get("data_quality_risks", [])),
+                    ("Migration Notes", data_mapping_result.get("mapping_analysis", {}).get("migration_notes", [])),
+                    ("Confidence", data_mapping_result.get("mapping_analysis", {}).get("confidence", {})),
+                ],
+            )
+
         validation_result = result.get("validation_result", {})
         if validation_result:
             write_sectioned_excel_sheet(
                 writer,
-                "11 Validation",
+                "12 Validation",
                 [
                     ("Summary", validation_result.get("summary", {})),
                     ("Differences", validation_result.get("differences", [])),
@@ -589,7 +631,10 @@ def init_approval_state() -> None:
     st.session_state.setdefault("auto_run_stage", "")
     st.session_state.setdefault("validation_result", None)
     st.session_state.setdefault("validation_error", None)
+    st.session_state.setdefault("data_mapping_result", None)
+    st.session_state.setdefault("data_mapping_error", None)
     st.session_state.setdefault("pending_main_section", "")
+    st.session_state.setdefault("show_analysis_workspace", False)
 
 
 def sync_approval_state_from_result(result: dict) -> None:
@@ -651,31 +696,217 @@ def _add_doc_section(document, title: str, value: Any) -> None:
     document.add_paragraph(_stringify_value(value) if value not in (None, "") else "None")
 
 
+def _set_cell_text(cell, text: Any, bold: bool = False) -> None:
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    run = paragraph.add_run("" if text is None else str(text))
+    run.bold = bold
+
+
+def _shade_table_header(table, fill: str = "D9EAF7") -> None:
+    if OxmlElement is None or qn is None or not table.rows:
+        return
+    for cell in table.rows[0].cells:
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:fill"), fill)
+        tc_pr.append(shd)
+
+
+def _format_document_base(document, title: str, subtitle: str) -> None:
+    if Pt is not None:
+        for section in document.sections:
+            section.top_margin = Inches(0.7)
+            section.bottom_margin = Inches(0.7)
+            section.left_margin = Inches(0.8)
+            section.right_margin = Inches(0.8)
+
+        styles = document.styles
+        styles["Normal"].font.name = "Calibri"
+        styles["Normal"].font.size = Pt(10)
+        styles["Title"].font.name = "Calibri"
+        styles["Title"].font.size = Pt(20)
+
+    title_para = document.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER if WD_ALIGN_PARAGRAPH is not None else None
+    title_run = title_para.add_run(title)
+    title_run.bold = True
+    if Pt is not None:
+        title_run.font.size = Pt(20)
+
+    subtitle_para = document.add_paragraph()
+    subtitle_para.alignment = WD_ALIGN_PARAGRAPH.CENTER if WD_ALIGN_PARAGRAPH is not None else None
+    subtitle_run = subtitle_para.add_run(subtitle)
+    if Pt is not None:
+        subtitle_run.font.size = Pt(11)
+
+    document.add_paragraph("")
+
+
+def _add_metadata_table(document, rows: list[tuple[str, Any]]) -> None:
+    table = document.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    _set_cell_text(table.rows[0].cells[0], "Document Attribute", bold=True)
+    _set_cell_text(table.rows[0].cells[1], "Value", bold=True)
+    _shade_table_header(table)
+    for label, value in rows:
+        cells = table.add_row().cells
+        _set_cell_text(cells[0], label, bold=True)
+        _set_cell_text(cells[1], _stringify_value(value) if value not in (None, "") else "Not provided")
+    document.add_paragraph("")
+
+
+def _add_paragraph_section(document, heading: str, body: Any) -> None:
+    document.add_heading(heading, level=1)
+    if isinstance(body, list):
+        if not body:
+            document.add_paragraph("None.")
+            return
+        for item in body:
+            document.add_paragraph(_stringify_value(item), style="List Bullet")
+        return
+    if isinstance(body, dict):
+        if not body:
+            document.add_paragraph("None.")
+            return
+        for key, value in body.items():
+            paragraph = document.add_paragraph(style="List Bullet")
+            paragraph.add_run(f"{key}: ").bold = True
+            paragraph.add_run(_stringify_value(value))
+        return
+    text = str(body).strip() if body not in (None, "") else ""
+    document.add_paragraph(text or "None.")
+
+
+def _add_key_value_table_section(document, heading: str, items: list[dict], field_labels: list[tuple[str, str]]) -> None:
+    document.add_heading(heading, level=1)
+    if not items:
+        document.add_paragraph("No entries recorded.")
+        return
+
+    for index, item in enumerate(items, start=1):
+        document.add_heading(f"{heading[:-1] if heading.endswith('s') else heading} {index}", level=2)
+        table = document.add_table(rows=1, cols=2)
+        table.style = "Table Grid"
+        _set_cell_text(table.rows[0].cells[0], "Attribute", bold=True)
+        _set_cell_text(table.rows[0].cells[1], "Detail", bold=True)
+        _shade_table_header(table)
+        for label, key in field_labels:
+            value = item.get(key, "") if isinstance(item, dict) else ""
+            cells = table.add_row().cells
+            _set_cell_text(cells[0], label, bold=True)
+            if isinstance(value, list):
+                _set_cell_text(cells[1], "\n".join(str(entry) for entry in value) if value else "None")
+            else:
+                _set_cell_text(cells[1], _stringify_value(value) if value not in (None, "") else "None")
+        document.add_paragraph("")
+
+
+def _add_matrix_table_section(document, heading: str, items: list[dict], columns: list[tuple[str, str]]) -> None:
+    document.add_heading(heading, level=1)
+    if not items:
+        document.add_paragraph("No entries recorded.")
+        return
+
+    table = document.add_table(rows=1, cols=len(columns))
+    table.style = "Table Grid"
+    for idx, (label, _key) in enumerate(columns):
+        _set_cell_text(table.rows[0].cells[idx], label, bold=True)
+    _shade_table_header(table)
+
+    for item in items:
+        row_cells = table.add_row().cells
+        for idx, (_label, key) in enumerate(columns):
+            value = item.get(key, "") if isinstance(item, dict) else ""
+            if isinstance(value, list):
+                value = "\n".join(str(entry) for entry in value)
+            _set_cell_text(row_cells[idx], _stringify_value(value) if value not in (None, "") else "None")
+    document.add_paragraph("")
+
+
 def build_requirements_docx(requirements_draft: dict) -> bytes | None:
     if not requirements_draft or Document is None:
         return None
 
     document = Document()
-    document.add_heading("Business Requirements Document", level=0)
-    document.add_paragraph(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    _format_document_base(document, "Business Requirements Document", "Modernization Program Working Draft")
+    _add_metadata_table(
+        document,
+        [
+            ("Document Type", "Business Requirements Document"),
+            ("Status", requirements_draft.get("approval", {}).get("status", "PENDING_SME_APPROVAL")),
+            ("Required Reviewer", requirements_draft.get("approval", {}).get("required_reviewer_role", "SME")),
+            ("Screen / Process", requirements_draft.get("screen_name", "Quote Generation")),
+            ("Generated On", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")),
+        ],
+    )
 
-    section_order = [
-        ("Screen Name", requirements_draft.get("screen_name", "")),
-        ("Business Context", requirements_draft.get("business_context", "")),
-        ("Functional Requirements", requirements_draft.get("functional_requirements", [])),
-        ("Non-Functional Requirements", requirements_draft.get("non_functional_requirements", [])),
-        ("Compliance Requirements", requirements_draft.get("compliance_requirements", [])),
-        ("Data Requirements", requirements_draft.get("data_requirements", [])),
-        ("UI Requirements", requirements_draft.get("ui_requirements", [])),
-        ("API Requirements", requirements_draft.get("api_requirements", [])),
-        ("Migration Requirements", requirements_draft.get("migration_requirements", [])),
-        ("Assumptions", requirements_draft.get("assumptions", [])),
-        ("Open Questions For SME", requirements_draft.get("open_questions_for_sme", [])),
-        ("Review Notes", requirements_draft.get("review_notes", [])),
-        ("Approval", requirements_draft.get("approval", {})),
-    ]
-    for title, value in section_order:
-        _add_doc_section(document, title, value)
+    _add_paragraph_section(document, "1. Business Context", requirements_draft.get("business_context", ""))
+    _add_matrix_table_section(
+        document,
+        "2. Functional Requirements",
+        requirements_draft.get("functional_requirements", []),
+        [
+            ("ID", "id"),
+            ("Title", "title"),
+            ("Description", "description"),
+            ("Priority", "priority"),
+            ("Rationale", "rationale"),
+            ("Source Gap", "source_gap"),
+            ("Acceptance Criteria", "acceptance_criteria"),
+        ],
+    )
+    _add_matrix_table_section(
+        document,
+        "3. Non-Functional Requirements",
+        requirements_draft.get("non_functional_requirements", []),
+        [("ID", "id"), ("Title", "title"), ("Description", "description"), ("Priority", "priority")],
+    )
+    _add_matrix_table_section(
+        document,
+        "4. Compliance Requirements",
+        requirements_draft.get("compliance_requirements", []),
+        [("ID", "id"), ("Title", "title"), ("Description", "description"), ("Region", "region"), ("Priority", "priority")],
+    )
+    _add_matrix_table_section(
+        document,
+        "5. Data Requirements",
+        requirements_draft.get("data_requirements", []),
+        [("ID", "id"), ("Entity", "entity"), ("Requirement", "requirement")],
+    )
+    _add_matrix_table_section(
+        document,
+        "6. UI Requirements",
+        requirements_draft.get("ui_requirements", []),
+        [("ID", "id"), ("Field / Component", "field_or_component"), ("Requirement", "requirement")],
+    )
+    _add_matrix_table_section(
+        document,
+        "7. API Requirements",
+        requirements_draft.get("api_requirements", []),
+        [("ID", "id"), ("API Name", "api_name"), ("Requirement", "requirement")],
+    )
+    _add_matrix_table_section(
+        document,
+        "8. Migration Requirements",
+        requirements_draft.get("migration_requirements", []),
+        [("ID", "id"), ("Requirement", "requirement")],
+    )
+    _add_paragraph_section(document, "9. Assumptions", requirements_draft.get("assumptions", []))
+    _add_paragraph_section(document, "10. Open Questions For SME", requirements_draft.get("open_questions_for_sme", []))
+    _add_paragraph_section(document, "11. Review Notes", requirements_draft.get("review_notes", []))
+    _add_key_value_table_section(
+        document,
+        "12. Approval Summary",
+        [requirements_draft.get("approval", {})],
+        [
+            ("Status", "status"),
+            ("Required Reviewer Role", "required_reviewer_role"),
+            ("Approved By", "approved_by"),
+            ("Approved On", "approved_on"),
+            ("Review Comments", "review_comments"),
+        ],
+    )
 
     output = BytesIO()
     document.save(output)
@@ -687,27 +918,99 @@ def build_technical_spec_docx(technical_spec_draft: dict) -> bytes | None:
         return None
 
     document = Document()
-    document.add_heading("Technical Specification", level=0)
-    document.add_paragraph(f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    _format_document_base(document, "Technical Specification", "Modernization Program Working Draft")
+    _add_metadata_table(
+        document,
+        [
+            ("Document Type", "Technical Specification"),
+            ("Status", technical_spec_draft.get("approval", {}).get("status", "PENDING_ARCHITECT_APPROVAL")),
+            ("Required Reviewer", technical_spec_draft.get("approval", {}).get("required_reviewer_role", "Architect")),
+            ("Screen / Process", technical_spec_draft.get("screen_name", "Quote Generation")),
+            ("Generated On", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")),
+        ],
+    )
 
-    section_order = [
-        ("Screen Name", technical_spec_draft.get("screen_name", "")),
-        ("Target Stack", technical_spec_draft.get("target_stack", {})),
-        ("UI Design", technical_spec_draft.get("ui_design", [])),
-        ("API Design", technical_spec_draft.get("api_design", [])),
-        ("Service Design", technical_spec_draft.get("service_design", [])),
-        ("Data Design", technical_spec_draft.get("data_design", [])),
-        ("Rule Configuration Design", technical_spec_draft.get("rule_configuration_design", [])),
-        ("Validation Design", technical_spec_draft.get("validation_design", [])),
-        ("Security And Compliance Design", technical_spec_draft.get("security_and_compliance_design", [])),
-        ("Integration Design", technical_spec_draft.get("integration_design", [])),
-        ("Assumptions", technical_spec_draft.get("assumptions", [])),
-        ("Open Questions For Architect", technical_spec_draft.get("open_questions_for_architect", [])),
-        ("Review Notes", technical_spec_draft.get("review_notes", [])),
-        ("Approval", technical_spec_draft.get("approval", {})),
-    ]
-    for title, value in section_order:
-        _add_doc_section(document, title, value)
+    _add_key_value_table_section(
+        document,
+        "1. Target Stack",
+        [technical_spec_draft.get("target_stack", {})],
+        [("Frontend", "frontend"), ("Backend", "backend"), ("Database", "database")],
+    )
+    _add_matrix_table_section(
+        document,
+        "2. UI Design",
+        technical_spec_draft.get("ui_design", []),
+        [("Component", "component"), ("Responsibility", "responsibility"), ("Related Requirement IDs", "related_requirement_ids")],
+    )
+    _add_matrix_table_section(
+        document,
+        "3. API Design",
+        technical_spec_draft.get("api_design", []),
+        [
+            ("Name", "name"),
+            ("Method", "method"),
+            ("Path", "path"),
+            ("Request Fields", "request_fields"),
+            ("Response Fields", "response_fields"),
+            ("Related Requirement IDs", "related_requirement_ids"),
+        ],
+    )
+    _add_matrix_table_section(
+        document,
+        "4. Service Design",
+        technical_spec_draft.get("service_design", []),
+        [
+            ("Service Name", "service_name"),
+            ("Responsibility", "responsibility"),
+            ("Business Rules Supported", "business_rules_supported"),
+            ("Related Requirement IDs", "related_requirement_ids"),
+        ],
+    )
+    _add_matrix_table_section(
+        document,
+        "5. Data Design",
+        technical_spec_draft.get("data_design", []),
+        [("Entity", "entity"), ("Fields", "fields"), ("Relationships", "relationships"), ("Related Requirement IDs", "related_requirement_ids")],
+    )
+    _add_matrix_table_section(
+        document,
+        "6. Rule Configuration Design",
+        technical_spec_draft.get("rule_configuration_design", []),
+        [("Rule Area", "rule_area"), ("Approach", "approach"), ("Details", "details"), ("Related Requirement IDs", "related_requirement_ids")],
+    )
+    _add_matrix_table_section(
+        document,
+        "7. Validation Design",
+        technical_spec_draft.get("validation_design", []),
+        [("Validation Name", "validation_name"), ("Logic", "logic"), ("Layer", "layer"), ("Related Requirement IDs", "related_requirement_ids")],
+    )
+    _add_matrix_table_section(
+        document,
+        "8. Security And Compliance Design",
+        technical_spec_draft.get("security_and_compliance_design", []),
+        [("Area", "area"), ("Design Decision", "design_decision"), ("Related Requirement IDs", "related_requirement_ids")],
+    )
+    _add_matrix_table_section(
+        document,
+        "9. Integration Design",
+        technical_spec_draft.get("integration_design", []),
+        [("Integration Point", "integration_point"), ("Details", "details")],
+    )
+    _add_paragraph_section(document, "10. Assumptions", technical_spec_draft.get("assumptions", []))
+    _add_paragraph_section(document, "11. Open Questions For Architect", technical_spec_draft.get("open_questions_for_architect", []))
+    _add_paragraph_section(document, "12. Review Notes", technical_spec_draft.get("review_notes", []))
+    _add_key_value_table_section(
+        document,
+        "13. Approval Summary",
+        [technical_spec_draft.get("approval", {})],
+        [
+            ("Status", "status"),
+            ("Required Reviewer Role", "required_reviewer_role"),
+            ("Approved By", "approved_by"),
+            ("Approved On", "approved_on"),
+            ("Review Comments", "review_comments"),
+        ],
+    )
 
     output = BytesIO()
     document.save(output)
@@ -1236,6 +1539,45 @@ def render_validation_result(validation_result: dict) -> None:
     render_table(validation_result.get("suggestions", []), "No suggestions generated.")
 
 
+def render_data_mapping_result(data_mapping_result: dict) -> None:
+    if not data_mapping_result:
+        st.info("Run final data mapping after forward engineering proof to compare the final generated design with the legacy and initial target data models.")
+        return
+
+    mapping_analysis = data_mapping_result.get("mapping_analysis", {})
+    summary = mapping_analysis.get("summary", {})
+    top1, top2, top3, top4 = st.columns(4)
+    top1.metric("Mapping Coverage", f"{to_float(summary.get('mapping_coverage', 0.0)):.0%}")
+    top2.metric("Mapped Columns", str(summary.get("mapped_columns_count", 0)))
+    top3.metric("Unmapped Columns", str(summary.get("unmapped_columns_count", 0)))
+    top4.metric("Transformations", str(summary.get("transformation_count", 0)))
+
+    findings = summary.get("key_findings", [])
+    if findings:
+        st.caption(" ".join(str(item) for item in findings))
+
+    mapping_tab, reconciliation_tab, risk_tab = st.tabs(["Column Mapping", "Reconciliation", "Risks"])
+    with mapping_tab:
+        st.markdown("**Column Mapping**")
+        render_table(format_data_mapping_field_rows(mapping_analysis.get("field_mappings", [])), "No field mappings generated.")
+        st.markdown("**Transformation Logic**")
+        render_table(mapping_analysis.get("transformations", []), "No transformations generated.")
+        st.markdown("**Reference Data Mappings**")
+        render_table(mapping_analysis.get("reference_data_mappings", []), "No reference data mappings generated.")
+        st.markdown("**New Final State Fields**")
+        render_table(mapping_analysis.get("new_final_state_fields", []), "No new final-state fields recorded.")
+    with reconciliation_tab:
+        st.markdown("**Reconciliation Approach**")
+        render_table(mapping_analysis.get("reconciliation_approach", []), "No reconciliation approach generated.")
+        st.markdown("**Unmapped Legacy Fields**")
+        render_table(mapping_analysis.get("unmapped_legacy_fields", []), "No unmapped legacy fields detected.")
+    with risk_tab:
+        st.markdown("**Data Quality Risks**")
+        render_table(mapping_analysis.get("data_quality_risks", []), "No data quality risks detected.")
+        st.markdown("**Migration Notes**")
+        render_table(mapping_analysis.get("migration_notes", []), "No migration notes generated.")
+
+
 def format_gap_rule_rows(items: list[dict], prefix: str = "BR") -> list[dict]:
     rows: list[dict] = []
     for index, item in enumerate(items, start=1):
@@ -1245,6 +1587,43 @@ def format_gap_rule_rows(items: list[dict], prefix: str = "BR") -> list[dict]:
         canonical_rule_key = str(row.get("rule_id", "")).strip()
         row["rule_id"] = f"{prefix}-{index:03d}"
         row["Canonical Rule Key"] = canonical_rule_key.replace("*", "_") if canonical_rule_key else ""
+        rows.append(row)
+    return rows
+
+
+def format_data_mapping_field_rows(items: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    ordered_keys = [
+        "final_target_entity",
+        "final_target_field",
+        "data_mapping_rule",
+        "legacy_entity",
+        "legacy_field",
+        "initial_target_entity",
+        "initial_target_field",
+        "mapping_type",
+        "migration_status",
+        "change_category",
+        "source_data_type",
+        "initial_target_data_type",
+        "final_target_data_type",
+        "data_source",
+        "allowed_values",
+        "required_for_migration",
+        "notes",
+        "evidence",
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized_item = dict(item)
+        normalized_item["data_mapping_rule"] = normalized_item.get("data_mapping_rule") or normalized_item.get("transformation_logic", "")
+        row: dict[str, Any] = {}
+        for key in ordered_keys:
+            row[key] = normalized_item.get(key, "")
+        for key, value in normalized_item.items():
+            if key not in row and key != "transformation_logic":
+                row[key] = value
         rows.append(row)
     return rows
 
@@ -1558,6 +1937,179 @@ def render_comparison(collated: dict, gap_analysis: dict) -> None:
         render_table(format_gap_rule_rows(gap_analysis.get("rule_comparison", [])), "No rule comparison available.")
 
 
+def render_flow_overview_screen() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        .block-container {
+            max-width: 100% !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    header_left, header_right = st.columns([6, 1])
+    with header_right:
+        if st.button("Start", type="primary", use_container_width=True):
+            st.session_state["show_analysis_workspace"] = True
+            st.rerun()
+
+    steps = [
+        (1, "Legacy Code Reverse"),
+        (2, "Legacy SQL Reverse"),
+        (3, "Legacy Collate"),
+        (4, "Target Code Reverse"),
+        (5, "Target SQL Reverse"),
+        (6, "Target Collate"),
+        (7, "Gap Analysis"),
+        (8, "BRD Draft"),
+        (9, "SME Approval"),
+        (10, "Technical Specification"),
+        (11, "Architect Approval"),
+        (12, "Forward Engineering"),
+        (13, "FE Proof"),
+        (14, "Final Data Mapping"),
+        (15, "Validation"),
+    ]
+    rows = [steps[i : i + 3] for i in range(0, len(steps), 3)]
+    for row in rows:
+        cols = st.columns(3)
+        for idx, col in enumerate(cols):
+            if idx >= len(row):
+                col.empty()
+                continue
+            step_number, step_name = row[idx]
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="panel-card" style="
+                        min-height: 138px;
+                        padding: 1.15rem 1rem;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: space-between;
+                        border-radius: 20px;
+                    ">
+                        <div style="
+                            width: 36px;
+                            height: 36px;
+                            border-radius: 999px;
+                            background: linear-gradient(180deg, #0b4e8c 0%, #164f7b 100%);
+                            color: #ffffff;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-weight: 700;
+                            font-size: 0.95rem;
+                            margin-bottom: 0.85rem;
+                        ">
+                            {step_number}
+                        </div>
+                        <div style="
+                            font-weight: 700;
+                            color: #10233b;
+                            font-size: 1rem;
+                            line-height: 1.3;
+                        ">
+                            {step_name}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    return
+
+    steps = [
+        "Legacy Code Reverse",
+        "Legacy SQL Reverse",
+        "Legacy Collate",
+        "Target Code Reverse",
+        "Target SQL Reverse",
+        "Target Collate",
+        "Gap Analysis",
+        "BRD Draft",
+        "SME Approval",
+        "Technical Specification",
+        "Architect Approval",
+        "Forward Engineering",
+        "FE Proof",
+        "Final Data Mapping",
+        "Validation",
+    ]
+    flow_cards = []
+    for index, step in enumerate(steps, start=1):
+        flow_cards.append(
+            f"""
+            <div style="
+                min-width: 170px;
+                max-width: 170px;
+                background: rgba(255,255,255,0.96);
+                border: 1px solid rgba(15,23,42,0.10);
+                border-radius: 16px;
+                padding: 0.9rem 0.85rem;
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+                text-align: center;
+                flex: 0 0 auto;
+            ">
+                <div style="
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 999px;
+                    background: #0b4e8c;
+                    color: white;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: 700;
+                    margin-bottom: 0.55rem;
+                ">{index}</div>
+                <div style="
+                    color: #10233b;
+                    font-weight: 700;
+                    font-size: 0.92rem;
+                    line-height: 1.25;
+                ">{step}</div>
+            </div>
+            """
+        )
+        if index < len(steps):
+            flow_cards.append(
+                """
+                <div style="
+                    flex: 0 0 auto;
+                    align-self: center;
+                    color: #5e7f9a;
+                    font-size: 1.5rem;
+                    font-weight: 700;
+                    padding: 0 0.35rem;
+                ">→</div>
+                """
+            )
+
+    st.markdown(
+        f"""
+        <div style="
+            display: flex;
+            gap: 0.2rem;
+            overflow-x: auto;
+            padding: 0.4rem 0.1rem 1rem 0.1rem;
+            align-items: stretch;
+        ">
+            {''.join(flow_cards)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if st.button("Go to Analysis", type="primary", use_container_width=True):
+        st.session_state["show_analysis_workspace"] = True
+        st.rerun()
+
+
 def main() -> None:
     apply_enterprise_theme()
     init_approval_state()
@@ -1568,6 +2120,8 @@ def main() -> None:
     default_legacy_sql = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "sql")
     default_target_code = str(settings.sample_inputs_dir / "target" / "quote_generation")
     default_target_sql = str(settings.sample_inputs_dir / "target" / "quote_generation" / "sql")
+    default_legacy_data_dictionary = str(settings.sample_inputs_dir / "data_dictionary" / "legacy")
+    default_target_data_dictionary = str(settings.sample_inputs_dir / "data_dictionary" / "target")
     model_options = MODEL_OPTIONS.copy()
     if settings.model and settings.model not in model_options:
         model_options.insert(0, settings.model)
@@ -1598,10 +2152,22 @@ def main() -> None:
             value=default_target_sql,
             help="Point this to the target SQL folder only.",
         )
+        st.markdown("### Data Dictionaries")
+        legacy_data_dictionary_folder = st.text_input(
+            "Legacy data dictionary folder",
+            value=default_legacy_data_dictionary,
+            help="Provide a folder containing the initial legacy data dictionary files such as CSV, JSON, TXT, or Markdown.",
+        )
+        target_data_dictionary_folder = st.text_input(
+            "Initial target data dictionary folder",
+            value=default_target_data_dictionary,
+            help="Provide a folder containing the initial target data dictionary files used before forward engineering.",
+        )
         selected_model = st.selectbox(
             "Model",
             options=model_options,
             index=selected_model_index,
+            format_func=lambda model_id: MODEL_LABELS.get(model_id, model_id),
         )
         cache_enabled = st.toggle(
             "Caching",
@@ -1623,6 +2189,9 @@ def main() -> None:
 
     settings.model = selected_model
     settings.cache_enabled = cache_enabled
+    if not st.session_state.get("show_analysis_workspace"):
+        render_flow_overview_screen()
+        return
     auto_run_analysis = st.session_state.pop("auto_run_analysis", False)
     auto_run_stage = st.session_state.pop("auto_run_stage", "")
 
@@ -1672,6 +2241,8 @@ def main() -> None:
             st.session_state["architect_comments"] = ""
             st.session_state["validation_result"] = None
             st.session_state["validation_error"] = None
+            st.session_state["data_mapping_result"] = None
+            st.session_state["data_mapping_error"] = None
 
         st.session_state.pop("analysis_error", None)
         st.session_state.pop("analysis_trace_dir", None)
@@ -1780,6 +2351,9 @@ def main() -> None:
     persisted_validation_result = result.get("validation_result")
     if st.session_state.get("validation_result") is None and persisted_validation_result:
         st.session_state["validation_result"] = persisted_validation_result
+    persisted_data_mapping_result = result.get("data_mapping_result")
+    if st.session_state.get("data_mapping_result") is None and persisted_data_mapping_result:
+        st.session_state["data_mapping_result"] = persisted_data_mapping_result
 
     workflow_excel_bytes = build_workflow_excel_export(result)
 
@@ -1811,6 +2385,7 @@ def main() -> None:
         "Technical Specification Draft",
         "Forward Engineering",
         "Forward Engineering Proof",
+        "Final Data Mapping",
         "Validation",
         "Execution Logs",
         "Raw JSON",
@@ -1904,6 +2479,8 @@ def main() -> None:
                     st.session_state["auto_run_stage"] = "technical_spec"
                     st.session_state["validation_result"] = None
                     st.session_state["validation_error"] = None
+                    st.session_state["data_mapping_result"] = None
+                    st.session_state["data_mapping_error"] = None
                     st.success("Requirements approved. Continuing automatically to technical specification generation.")
                     st.rerun()
                 else:
@@ -1957,6 +2534,8 @@ def main() -> None:
                     st.session_state["auto_run_stage"] = "forward_engineering"
                     st.session_state["validation_result"] = None
                     st.session_state["validation_error"] = None
+                    st.session_state["data_mapping_result"] = None
+                    st.session_state["data_mapping_error"] = None
                     st.success("Technical specification approved. Continuing automatically to forward engineering generation.")
                     st.rerun()
                 else:
@@ -2007,6 +2586,49 @@ def main() -> None:
                     st.session_state["validation_error"] = str(exc)
                     st.rerun()
 
+    elif active_section == "Forward Engineering Proof":
+        if requirements_status != SME_APPROVED:
+            st.info("Forward engineering proof is blocked until the requirements draft is SME approved.")
+        elif technical_spec_status != ARCHITECT_APPROVED:
+            st.info("Forward engineering proof is blocked until the technical specification is architect approved.")
+        else:
+            render_forward_engineering_proof(forward_comparison_items)
+            st.markdown("**Post-Generation Analysis**")
+            if st.button("Data Mapping and Reconciliation", use_container_width=True):
+                try:
+                    st.session_state["data_mapping_error"] = None
+                    generated_sql_folder = str(Path(generated_target.get("generated_root", "")) / "sql")
+                    with st.spinner("Running final data mapping analysis on the generated target..."):
+                        data_mapping_result = data_mapping_agent.run(
+                            legacy_spec=result.get("legacy_spec", {}),
+                            target_spec=result.get("target_spec", {}),
+                            generated_code_folder=generated_target.get("generated_root", ""),
+                            generated_sql_folder=generated_sql_folder,
+                            legacy_data_dictionary_folder=legacy_data_dictionary_folder,
+                            target_data_dictionary_folder=target_data_dictionary_folder,
+                            logger=lambda _a, _m: None,
+                        )
+                    st.session_state["data_mapping_result"] = data_mapping_result
+                    st.session_state["analysis_result"]["data_mapping_result"] = data_mapping_result
+                    st.session_state["pending_main_section"] = "Final Data Mapping"
+                    st.rerun()
+                except Exception as exc:
+                    st.session_state["data_mapping_error"] = str(exc)
+                    st.rerun()
+
+    elif active_section == "Final Data Mapping":
+        if requirements_status != SME_APPROVED:
+            st.info("Final data mapping is blocked until the requirements draft is SME approved.")
+        elif technical_spec_status != ARCHITECT_APPROVED:
+            st.info("Final data mapping is blocked until the technical specification is architect approved.")
+        elif not result.get("forward_engineering_output"):
+            st.info("Final data mapping is available after forward engineering generates target artifacts.")
+        else:
+            if st.session_state.get("data_mapping_error"):
+                st.error(st.session_state["data_mapping_error"])
+            data_mapping_result = st.session_state.get("data_mapping_result") or result.get("data_mapping_result")
+            render_data_mapping_result(data_mapping_result)
+
     elif active_section == "Validation":
         if requirements_status != SME_APPROVED:
             st.info("Validation is blocked until the requirements draft is SME approved.")
@@ -2019,14 +2641,6 @@ def main() -> None:
                 st.error(st.session_state["validation_error"])
             validation_result = st.session_state.get("validation_result") or result.get("validation_result")
             render_validation_result(validation_result)
-
-    elif active_section == "Forward Engineering Proof":
-        if requirements_status != SME_APPROVED:
-            st.info("Forward engineering proof is blocked until the requirements draft is SME approved.")
-        elif technical_spec_status != ARCHITECT_APPROVED:
-            st.info("Forward engineering proof is blocked until the technical specification is architect approved.")
-        else:
-            render_forward_engineering_proof(forward_comparison_items)
 
     elif active_section == "Execution Logs":
         render_logs(result.get("logs", []))
