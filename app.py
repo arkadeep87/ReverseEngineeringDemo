@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 import difflib
 from io import BytesIO
 import json
+import os
 from pathlib import Path
+import re
 import shutil
 from typing import Any
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 import pandas as pd
 import streamlit as st
@@ -44,6 +50,7 @@ from graph import (
     stream_workflow,
 )
 from utils.cache import AgentCache
+from agents import ai_code_review as ai_code_review_agent
 from agents import data_mapping as data_mapping_agent
 from agents import validation as validation_agent
 
@@ -84,6 +91,23 @@ WORKFLOW_PHASES = [
     ("requirements", "Drafting incremental business requirements"),
     ("technical_spec", "Drafting incremental technical specification"),
     ("forward_engineering", "Generating forward-engineered code components"),
+]
+
+DASHBOARD_STAGES = [
+    {"key": "reverse_legacy", "label": "Legacy Reverse", "result_keys": ["legacy_code_reverse_spec", "legacy_sql_reverse_spec"], "detail_section": "Step Outputs"},
+    {"key": "collate_legacy", "label": "Legacy Collate", "result_keys": ["legacy_spec"], "detail_section": "Legacy Spec"},
+    {"key": "reverse_target", "label": "Target Reverse", "result_keys": ["target_code_reverse_spec", "target_sql_reverse_spec"], "detail_section": "Step Outputs"},
+    {"key": "collate_target", "label": "Target Collate", "result_keys": ["target_spec", "collated_spec"], "detail_section": "Target Spec"},
+    {"key": "gap", "label": "Gap Analysis", "result_keys": ["gap_analysis"], "detail_section": "Gap Analysis"},
+    {"key": "requirements", "label": "Requirements Draft", "result_keys": ["requirements_draft"], "detail_section": "Requirements Draft"},
+    {"key": "requirements_approval", "label": "SME Approval", "approval": "requirements"},
+    {"key": "technical_spec", "label": "Technical Spec", "result_keys": ["technical_spec_draft"], "detail_section": "Technical Specification Draft"},
+    {"key": "technical_spec_approval", "label": "Architect Approval", "approval": "technical_spec"},
+    {"key": "forward_engineering", "label": "Forward Engineering", "result_keys": ["forward_engineering_output"], "detail_section": "Forward Engineering"},
+    {"key": "forward_engineering_proof", "label": "FE Proof", "result_keys": ["forward_engineering_output"], "detail_section": "Forward Engineering Proof"},
+    {"key": "data_mapping", "label": "Final Data Mapping", "result_keys": ["data_mapping_result"], "detail_section": "Final Data Mapping"},
+    {"key": "validation", "label": "Validation", "result_keys": ["validation_result"], "detail_section": "Validation"},
+    {"key": "ai_code_review", "label": "AI Code Review", "result_keys": ["ai_code_review_result"], "detail_section": "AI Code Review"},
 ]
 
 
@@ -232,6 +256,203 @@ def apply_enterprise_theme() -> None:
             color: #61758b;
             font-size: 0.9rem;
         }
+        .dashboard-stage {
+            border-radius: 18px;
+            padding: 1rem 1.05rem;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: rgba(255, 255, 255, 0.95);
+            height: 170px;
+            box-shadow: 0 14px 28px rgba(15, 23, 42, 0.05);
+            overflow: hidden;
+        }
+        .dashboard-stage-shell {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            height: 100%;
+        }
+        .dashboard-stage-main {
+            flex: 1 1 auto;
+        }
+        .dashboard-hero {
+            padding: 1.2rem 1.35rem;
+            border-radius: 22px;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background:
+                radial-gradient(circle at top right, rgba(11, 78, 140, 0.16), transparent 32%),
+                linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(245, 249, 253, 0.98) 100%);
+            box-shadow: 0 18px 36px rgba(15, 23, 42, 0.07);
+            margin-bottom: 1rem;
+        }
+        .dashboard-kicker {
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.72rem;
+            color: #0b4e8c;
+            font-weight: 800;
+        }
+        .dashboard-title {
+            margin: 0.3rem 0 0.35rem 0;
+            font-size: 1.7rem;
+            line-height: 1.1;
+            color: #10233b;
+            font-weight: 800;
+        }
+        .dashboard-subtitle {
+            color: #5a6b80;
+            font-size: 0.96rem;
+            line-height: 1.45;
+        }
+        .dashboard-mini-metric {
+            border-radius: 18px;
+            padding: 1rem 1.05rem;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: rgba(255, 255, 255, 0.94);
+            min-height: 118px;
+        }
+        .dashboard-mini-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #6d7d91;
+            font-weight: 700;
+        }
+        .dashboard-mini-value {
+            margin-top: 0.45rem;
+            color: #10233b;
+            font-size: 1.5rem;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .dashboard-mini-copy {
+            color: #607287;
+            font-size: 0.88rem;
+            margin-top: 0.45rem;
+        }
+        .dashboard-stage-label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #10233b;
+            margin: 0.35rem 0 0.5rem 0;
+        }
+        .dashboard-stage-copy {
+            color: #5d7086;
+            font-size: 0.92rem;
+            line-height: 1.35;
+            min-height: 72px;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 4;
+            -webkit-box-orient: vertical;
+        }
+        div.dashboard-card-action div.stButton > button,
+        div.dashboard-card-action button[kind="secondary"],
+        div.dashboard-card-action button[kind="primary"] {
+            border-radius: 999px;
+            min-height: 34px;
+            height: 34px;
+            padding: 0 0.8rem;
+            border: 1px solid rgba(11, 78, 140, 0.9) !important;
+            background: linear-gradient(180deg, #0b4e8c 0%, #164f7b 100%) !important;
+            color: #ffffff !important;
+            font-size: 0.82rem;
+            font-weight: 700;
+            box-shadow: 0 10px 20px rgba(11, 78, 140, 0.18) !important;
+        }
+        div.dashboard-card-action div.stButton > button:hover,
+        div.dashboard-card-action button[kind="secondary"]:hover,
+        div.dashboard-card-action button[kind="primary"]:hover {
+            border-color: rgba(11, 78, 140, 1) !important;
+            color: #ffffff !important;
+            background: linear-gradient(180deg, #0d579c 0%, #0f466d 100%) !important;
+        }
+        div.dashboard-card-action div.stButton > button p,
+        div.dashboard-card-action button[kind="secondary"] p,
+        div.dashboard-card-action button[kind="primary"] p {
+            color: #ffffff !important;
+        }
+        .dashboard-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            border-radius: 999px;
+            padding: 0.28rem 0.62rem;
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+        .dashboard-badge.done {
+            background: rgba(46, 125, 50, 0.12);
+            color: #2e7d32;
+        }
+        .dashboard-badge.running {
+            background: rgba(11, 78, 140, 0.12);
+            color: #0b4e8c;
+        }
+        .dashboard-badge.ready {
+            background: rgba(239, 108, 0, 0.12);
+            color: #ef6c00;
+        }
+        .dashboard-badge.blocked,
+        .dashboard-badge.pending {
+            background: rgba(107, 124, 147, 0.12);
+            color: #55687e;
+        }
+        .dashboard-badge.rejected {
+            background: rgba(198, 40, 40, 0.12);
+            color: #c62828;
+        }
+        .dashboard-list-card {
+            border-radius: 20px;
+            padding: 1rem 1.1rem;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
+            height: 100%;
+        }
+        .dashboard-list-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.55rem 0;
+            border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+        }
+        .dashboard-list-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .dashboard-list-key {
+            color: #66788d;
+            font-size: 0.88rem;
+        }
+        .dashboard-list-value {
+            color: #10233b;
+            font-size: 0.92rem;
+            font-weight: 700;
+            text-align: right;
+        }
+        .dashboard-event {
+            border-left: 4px solid #0b4e8c;
+            border-radius: 14px;
+            padding: 0.8rem 0.9rem;
+            background: rgba(255, 255, 255, 0.9);
+            border-top: 1px solid rgba(15, 23, 42, 0.06);
+            border-right: 1px solid rgba(15, 23, 42, 0.06);
+            border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+            margin-bottom: 0.65rem;
+        }
+        .dashboard-event-meta {
+            color: #6a7b90;
+            font-size: 0.78rem;
+            font-weight: 700;
+            margin-bottom: 0.2rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .dashboard-event-copy {
+            color: #10233b;
+            font-size: 0.92rem;
+            line-height: 1.35;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -284,6 +505,61 @@ def normalize_for_table(items: Any) -> pd.DataFrame:
     return pd.DataFrame({"value": [str(items)]})
 
 
+DISPLAY_TOKEN_MAP = {
+    "api": "API",
+    "apis": "APIs",
+    "ai": "AI",
+    "brd": "BRD",
+    "fe": "FE",
+    "github": "GitHub",
+    "id": "ID",
+    "ids": "IDs",
+    "ip": "IP",
+    "json": "JSON",
+    "pr": "PR",
+    "qa": "QA",
+    "sql": "SQL",
+    "sme": "SME",
+    "ui": "UI",
+    "url": "URL",
+    "urls": "URLs",
+    "vb": "VB",
+}
+
+
+def format_table_header(label: Any) -> str:
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    parts = re.split(r"[._\s]+", text)
+    formatted_parts = []
+    for part in parts:
+        if not part:
+            continue
+        formatted_parts.append(DISPLAY_TOKEN_MAP.get(part.lower(), part[:1].upper() + part[1:]))
+    return " ".join(formatted_parts)
+
+
+def _looks_like_technical_text(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(marker in stripped for marker in ("://", "\\", "/", "@")) or bool(re.search(r"\.[A-Za-z0-9]{1,8}$", stripped))
+
+
+def format_table_value(value: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or _looks_like_technical_text(text):
+            return value
+        if "_" in text and text.lower() == text:
+            return format_table_header(text)
+        if text[:1].islower():
+            return text[:1].upper() + text[1:]
+        return text
+    return value
+
+
 def sanitize_dataframe_for_display(dataframe: pd.DataFrame) -> pd.DataFrame:
     if dataframe.empty:
         return dataframe
@@ -293,9 +569,11 @@ def sanitize_dataframe_for_display(dataframe: pd.DataFrame) -> pd.DataFrame:
             return ", ".join(str(item) for item in value)
         if isinstance(value, dict):
             return json.dumps(value, ensure_ascii=False, sort_keys=True)
-        return value
+        return format_table_value(value)
 
-    return dataframe.map(normalize_cell)
+    sanitized = dataframe.map(normalize_cell)
+    sanitized.columns = [format_table_header(column) for column in sanitized.columns]
+    return sanitized
 
 
 def make_excel_safe_sheet_name(name: str) -> str:
@@ -347,6 +625,7 @@ def build_workflow_excel_export(result: dict) -> bytes | None:
             {"step": "Forward Engineering", "available": bool(result.get("forward_engineering_output")), "type": "forward_engineering"},
             {"step": "Final Data Mapping", "available": bool(result.get("data_mapping_result")), "type": "data_mapping"},
             {"step": "Validation", "available": bool(result.get("validation_result")), "type": "validation"},
+            {"step": "AI Code Review", "available": bool(result.get("ai_code_review_result")), "type": "review"},
         ]
         pd.DataFrame(summary_rows).to_excel(writer, sheet_name="Run Summary", index=False)
 
@@ -452,7 +731,9 @@ def build_workflow_excel_export(result: dict) -> bytes | None:
                 "10 Forward Eng",
                 [
                     ("Angular Files", forward_engineering.get("angular_files", [])),
+                    ("Angular Test Files", forward_engineering.get("angular_test_files", [])),
                     ("Node.js Files", forward_engineering.get("nodejs_files", [])),
+                    ("Node.js Test Files", forward_engineering.get("nodejs_test_files", [])),
                     ("PostgreSQL Files", forward_engineering.get("postgres_files", [])),
                     ("Test Cases", forward_engineering.get("test_cases", [])),
                     ("Notes", {
@@ -481,11 +762,24 @@ def build_workflow_excel_export(result: dict) -> bytes | None:
                 ],
             )
 
+        ai_code_review_result = result.get("ai_code_review_result", {})
+        if ai_code_review_result:
+            write_sectioned_excel_sheet(
+                writer,
+                "12 AI Code Review",
+                [
+                    ("Summary", ai_code_review_result.get("summary", {})),
+                    ("Findings", ai_code_review_result.get("findings", [])),
+                    ("Strengths", ai_code_review_result.get("strengths", [])),
+                    ("PR Review Comment", {"review_comment_markdown": ai_code_review_result.get("review_comment_markdown", "")}),
+                ],
+            )
+
         validation_result = result.get("validation_result", {})
         if validation_result:
             write_sectioned_excel_sheet(
                 writer,
-                "12 Validation",
+                "13 Validation",
                 [
                     ("Summary", validation_result.get("summary", {})),
                     ("Differences", validation_result.get("differences", [])),
@@ -595,6 +889,1066 @@ def render_live_execution_status(log_placeholder, logs: list[dict]) -> None:
             )
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def parse_github_repo_full_name(remote_url: str) -> str:
+    cleaned = remote_url.strip()
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[:-4]
+    https_match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+)$", cleaned)
+    if https_match:
+        return f"{https_match.group('owner')}/{https_match.group('repo')}"
+    return ""
+
+
+def slugify_git_ref(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "generated-target"
+
+
+def get_github_token() -> str:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    # Be forgiving when the token is pasted with surrounding quotes in a .env file or shell.
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
+        token = token[1:-1].strip()
+    return token
+
+
+def github_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    token = get_github_token()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ai-migration-platform",
+    }
+    if token:
+        lowered = token.lower()
+        if lowered.startswith("bearer ") or lowered.startswith("token "):
+            headers["Authorization"] = token
+        elif token.startswith(("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_")):
+            headers["Authorization"] = f"token {token}"
+        else:
+            headers["Authorization"] = f"Bearer {token}"
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def github_api_json(path: str, method: str = "GET", payload: dict | None = None) -> dict:
+    url = path if path.startswith("http") else f"https://api.github.com{path}"
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(url, data=data, method=method, headers=github_headers({"Content-Type": "application/json"}))
+    try:
+        with urllib_request.urlopen(request) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        try:
+            message = json.loads(detail).get("message", detail)
+        except json.JSONDecodeError:
+            message = detail or exc.reason
+        if exc.code == 401:
+            message = (
+                f"{message}. Check GITHUB_TOKEN: it may be expired, pasted with quotes, or missing the required repository permissions."
+            )
+        raise RuntimeError(f"GitHub API error ({exc.code}): {message}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Unable to reach GitHub API: {exc.reason}") from exc
+
+
+def normalize_repo_path(path: str) -> str:
+    return path.strip().strip("/").replace("\\", "/")
+
+
+def github_fetch_repo_code_snapshot(repo_full_name: str, branch: str, code_root: str, destination: str) -> str:
+    if not get_github_token():
+        raise RuntimeError("GITHUB_TOKEN is not configured in the environment.")
+    normalized_root = normalize_repo_path(code_root)
+    branch_payload = github_api_json(f"/repos/{repo_full_name}/branches/{urllib_parse.quote(branch, safe='')}")
+    tree_sha = branch_payload.get("commit", {}).get("commit", {}).get("tree", {}).get("sha", "")
+    if not tree_sha:
+        raise RuntimeError(f"Unable to resolve tree SHA for {repo_full_name}@{branch}.")
+    tree_payload = github_api_json(f"/repos/{repo_full_name}/git/trees/{tree_sha}?recursive=1")
+    destination_path = Path(destination)
+    if destination_path.exists():
+        shutil.rmtree(destination_path)
+    destination_path.mkdir(parents=True, exist_ok=True)
+
+    for item in tree_payload.get("tree", []):
+        if item.get("type") != "blob":
+            continue
+        repo_path = str(item.get("path", "")).replace("\\", "/")
+        if normalized_root and not repo_path.startswith(f"{normalized_root}/") and repo_path != normalized_root:
+            continue
+        if repo_path.lower().endswith(".sql"):
+            continue
+        relative_path = repo_path[len(normalized_root):].lstrip("/") if normalized_root else repo_path
+        if not relative_path:
+            continue
+        blob_payload = github_api_json(f"/repos/{repo_full_name}/git/blobs/{item.get('sha', '')}")
+        encoded = blob_payload.get("content", "")
+        encoding = blob_payload.get("encoding", "base64")
+        if encoding != "base64":
+            continue
+        content = base64.b64decode(encoded.encode("utf-8"))
+        file_path = destination_path / Path(relative_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(content)
+    return str(destination_path)
+
+
+def build_publish_defaults(result: dict, target_branch: str) -> dict:
+    screen_name = str(result.get("requirements_draft", {}).get("screen_name", "")).strip()
+    branch_name = f"AUTOMATED_FE_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    commit_message = f"Add generated target candidate for {screen_name or 'migration flow'}"
+    pr_title = f"[codex] Forward engineering output for {screen_name or 'migration flow'}"
+    return {
+        "branch_name": branch_name,
+        "base_branch": target_branch,
+        "commit_message": commit_message,
+        "pr_title": pr_title,
+    }
+
+
+def build_forward_engineering_pr_body(result: dict, generated_target: dict, comparison_items: list[dict]) -> str:
+    forward_output = result.get("forward_engineering_output", {}) or {}
+    added_count = sum(1 for item in comparison_items if item.get("status") == "Added")
+    modified_count = sum(1 for item in comparison_items if item.get("status") == "Modified")
+    unchanged_count = sum(1 for item in comparison_items if item.get("status") == "Unchanged")
+    test_asset_count = len(forward_output.get("angular_test_files", [])) + len(forward_output.get("nodejs_test_files", []))
+    traceability = forward_output.get("traceability_summary", [])
+    notes = forward_output.get("generation_notes", [])
+    generated_root = generated_target.get("generated_root", "")
+    body_lines = [
+        "## What Changed",
+        "Publishes the forward-engineered target candidate generated by the modernization workflow.",
+        "",
+        "## Generated Output",
+        f"- Generated root: `{generated_root}`",
+        f"- Added files: {added_count}",
+        f"- Modified files: {modified_count}",
+        f"- Unchanged files: {unchanged_count}",
+        f"- Business test cases: {len(forward_output.get('test_cases', []))}",
+        f"- Automated unit test files: {test_asset_count}",
+        "",
+        "## Why",
+        "Captures the AI-generated target implementation in a draft PR so it can be reviewed before merge.",
+        "",
+        "## Traceability",
+    ]
+    if traceability:
+        body_lines.extend(f"- {item}" for item in traceability[:8])
+    else:
+        body_lines.append("- Traceability summary not available.")
+    body_lines.extend(["", "## Validation"])
+    if notes:
+        body_lines.extend(f"- {item}" for item in notes[:6])
+    else:
+        body_lines.append("- Forward engineering generation completed in the app.")
+    validation_summary = (result.get("validation_result") or {}).get("summary", {})
+    mapping_summary = ((result.get("data_mapping_result") or {}).get("mapping_analysis") or {}).get("summary", {})
+    body_lines.extend(["", "## AI-Assisted Code Review Summary"])
+    body_lines.append(f"- Added files: {added_count}; modified files: {modified_count}; unchanged files: {unchanged_count}.")
+    if validation_summary:
+        body_lines.append(
+            f"- Validation status: {validation_summary.get('overall_status', 'not_run')} with {validation_summary.get('difference_count', 0)} differences and sync score {to_float(validation_summary.get('sync_score', 0.0)):.0%}."
+        )
+    else:
+        body_lines.append("- Validation has not been run yet in the app.")
+    if mapping_summary:
+        body_lines.append(
+            f"- Data mapping coverage: {to_float(mapping_summary.get('mapping_coverage', 0.0)):.0%}; unmapped columns: {mapping_summary.get('unmapped_columns_count', 0)}."
+        )
+    else:
+        body_lines.append("- Final data mapping has not been run yet in the app.")
+    body_lines.append("- SQL artifacts were intentionally excluded from this PR; only code and automated test files are included.")
+    return "\n".join(body_lines)
+
+
+def build_ai_code_review_input(comparison_items: list[dict]) -> list[dict]:
+    review_items: list[dict] = []
+    for item in comparison_items:
+        if item.get("status") not in {"Added", "Modified"}:
+            continue
+        if item.get("group") == "postgres_files":
+            continue
+        review_items.append(
+            {
+                "file_name": item.get("file_name", ""),
+                "generated_relative_path": item.get("generated_relative_path", ""),
+                "status": item.get("status", ""),
+                "group": item.get("group", ""),
+                "purpose": item.get("purpose", ""),
+                "related_requirement_ids": item.get("related_requirement_ids", []),
+                "diff_text": str(item.get("diff_text", ""))[:6000],
+                "content_preview": str(item.get("content", ""))[:4000],
+            }
+        )
+    return review_items
+
+
+def github_post_pr_review_comment(repo_full_name: str, pr_number: int, review_body: str) -> dict:
+    return github_api_json(
+        f"/repos/{repo_full_name}/pulls/{pr_number}/reviews",
+        method="POST",
+        payload={"body": review_body, "event": "COMMENT"},
+    )
+
+
+def github_find_open_pr(repo_full_name: str, branch_name: str, base_branch: str) -> dict:
+    owner = repo_full_name.split("/", 1)[0]
+    pr_items = github_api_json(
+        f"/repos/{repo_full_name}/pulls?state=open&head={urllib_parse.quote(f'{owner}:{branch_name}', safe=':')}&base={urllib_parse.quote(base_branch, safe='')}"
+    )
+    if isinstance(pr_items, list) and pr_items:
+        return pr_items[0]
+    return {}
+
+
+def resolve_publish_config(result: dict, target_branch: str) -> dict:
+    defaults = build_publish_defaults(result, target_branch)
+    persisted_publish = st.session_state.get("github_publish_result") or result.get("github_publish_result") or {}
+    return {
+        "branch_name": (
+            persisted_publish.get("branch_name")
+            or st.session_state.get("github_branch_name")
+            or ""
+        ).strip(),
+        "base_branch": (
+            persisted_publish.get("base_branch")
+            or st.session_state.get("github_base_branch")
+            or defaults["base_branch"]
+        ).strip(),
+        "commit_message": (
+            persisted_publish.get("commit_message")
+            or st.session_state.get("github_commit_message")
+            or defaults["commit_message"]
+        ).strip(),
+        "pr_title": (
+            persisted_publish.get("pr_title")
+            or st.session_state.get("github_pr_title")
+            or defaults["pr_title"]
+        ).strip(),
+    }
+
+
+def publish_generated_target_pr(
+    generated_target: dict,
+    result: dict,
+    comparison_items: list[dict],
+    target_repo_full_name: str,
+    target_code_root: str,
+    branch_name: str,
+    base_branch: str,
+    commit_message: str,
+    pr_title: str,
+) -> dict:
+    generated_root = generated_target.get("generated_root", "")
+    if not generated_root:
+        raise RuntimeError("No generated target candidate is available to publish.")
+    if not get_github_token():
+        raise RuntimeError("GITHUB_TOKEN is not configured in the environment.")
+    branch_payload = github_api_json(f"/repos/{target_repo_full_name}/branches/{urllib_parse.quote(base_branch, safe='')}")
+    base_sha = branch_payload.get("commit", {}).get("sha", "")
+    if not base_sha:
+        raise RuntimeError(f"Unable to resolve base branch `{base_branch}` in {target_repo_full_name}.")
+    try:
+        github_api_json(
+            f"/repos/{target_repo_full_name}/git/refs",
+            method="POST",
+            payload={"ref": f"refs/heads/{branch_name}", "sha": base_sha},
+        )
+    except RuntimeError as exc:
+        if "Reference already exists" not in str(exc) and "422" not in str(exc):
+            raise
+
+    normalized_target_root = normalize_repo_path(target_code_root)
+    staged_files: list[str] = []
+    commit_sha = ""
+    for item in comparison_items:
+        if item.get("status") not in {"Added", "Modified"}:
+            continue
+        if item.get("group") == "postgres_files":
+            continue
+        relative_path = str(item.get("generated_relative_path", "")).replace("\\", "/")
+        if not relative_path or relative_path.lower().endswith(".sql"):
+            continue
+        repo_path = f"{normalized_target_root}/{relative_path}" if normalized_target_root else relative_path
+        content = item.get("content", "")
+        existing_sha = None
+        try:
+            existing_payload = github_api_json(
+                f"/repos/{target_repo_full_name}/contents/{urllib_parse.quote(repo_path, safe='/')}?ref={urllib_parse.quote(branch_name, safe='')}"
+            )
+            existing_sha = existing_payload.get("sha")
+        except RuntimeError as exc:
+            if "404" not in str(exc):
+                raise
+        update_payload = {
+            "message": commit_message,
+            "content": base64.b64encode(str(content).encode("utf-8")).decode("utf-8"),
+            "branch": branch_name,
+        }
+        if existing_sha:
+            update_payload["sha"] = existing_sha
+        update_result = github_api_json(
+            f"/repos/{target_repo_full_name}/contents/{urllib_parse.quote(repo_path, safe='/')}",
+            method="PUT",
+            payload=update_payload,
+        )
+        staged_files.append(repo_path)
+        commit_sha = update_result.get("commit", {}).get("sha", commit_sha)
+
+    if not staged_files:
+        raise RuntimeError("No non-SQL generated code or test files were found to publish.")
+
+    try:
+        pr_payload = github_api_json(
+            f"/repos/{target_repo_full_name}/pulls",
+            method="POST",
+            payload={
+                "title": pr_title,
+                "head": branch_name,
+                "base": base_branch,
+                "body": build_forward_engineering_pr_body(result, generated_target, comparison_items),
+                "draft": False,
+            },
+        )
+    except RuntimeError as exc:
+        if "A pull request already exists" not in str(exc) and "422" not in str(exc):
+            raise
+        pr_payload = github_find_open_pr(target_repo_full_name, branch_name, base_branch)
+        if not pr_payload:
+            raise
+    return {
+        "repository_full_name": target_repo_full_name,
+        "branch_name": branch_name,
+        "base_branch": base_branch,
+        "commit_message": commit_message,
+        "commit_sha": commit_sha,
+        "pr_title": pr_title,
+        "pr_number": pr_payload.get("number", 0),
+        "pr_url": pr_payload.get("html_url", ""),
+        "staged_files": staged_files,
+    }
+
+
+def render_github_pr_publish_panel(
+    result: dict,
+    generated_target: dict,
+    comparison_items: list[dict],
+    target_repo_full_name: str,
+    target_branch: str,
+    target_code_root: str,
+) -> None:
+    st.markdown("**Raise GitHub PR**")
+    if not generated_target.get("generated_root"):
+        st.info("Generate forward-engineered target artifacts before raising a GitHub PR.")
+        return
+
+    defaults = build_publish_defaults(result, target_branch)
+    if not st.session_state.get("github_branch_name"):
+        st.session_state["github_branch_name"] = defaults["branch_name"]
+    if not st.session_state.get("github_commit_message"):
+        st.session_state["github_commit_message"] = defaults["commit_message"]
+    if not st.session_state.get("github_pr_title"):
+        st.session_state["github_pr_title"] = defaults["pr_title"]
+
+    info_col, action_col = st.columns([3, 2])
+    with info_col:
+        st.caption(f"Repository: {target_repo_full_name}")
+        if not get_github_token():
+            st.warning("GITHUB_TOKEN is not configured. Set it in the environment before raising a PR.")
+    with action_col:
+        st.caption(f"Generated folder: `{generated_target.get('generated_root', '')}`")
+
+    base_col, branch_col = st.columns(2)
+    with base_col:
+        st.text_input("Base branch", key="github_base_branch")
+    with branch_col:
+        st.text_input("Publish branch", key="github_branch_name")
+
+    st.text_input("Commit message", key="github_commit_message")
+    st.text_input("PR title", key="github_pr_title")
+
+    if st.session_state.get("github_publish_error"):
+        st.error(st.session_state["github_publish_error"])
+    publish_result = st.session_state.get("github_publish_result") or result.get("github_publish_result")
+    if publish_result:
+        st.success("PR created successfully.")
+        publish_rows = [
+            {"metric": "Repository", "value": publish_result.get("repository_full_name", "")},
+            {"metric": "Branch", "value": publish_result.get("branch_name", "")},
+            {"metric": "Base", "value": publish_result.get("base_branch", "")},
+            {"metric": "Commit", "value": publish_result.get("commit_sha", "")[:12]},
+            {"metric": "PR URL", "value": publish_result.get("pr_url", "") or "Created"},
+        ]
+        render_table(publish_rows, "No PR details available.")
+
+    publish_disabled = not bool(get_github_token())
+    if st.button("Raise GitHub PR", use_container_width=True, disabled=publish_disabled):
+        try:
+            st.session_state["github_publish_error"] = None
+            st.session_state["github_publish_result"] = None
+            st.session_state["ai_code_review_result"] = None
+            st.session_state["ai_code_review_error"] = None
+            publish_result = publish_generated_target_pr(
+                generated_target=generated_target,
+                result=result,
+                comparison_items=comparison_items,
+                target_repo_full_name=target_repo_full_name,
+                target_code_root=target_code_root,
+                branch_name=st.session_state.get("github_branch_name", defaults["branch_name"]).strip(),
+                base_branch=st.session_state.get("github_base_branch", defaults["base_branch"]).strip(),
+                commit_message=st.session_state.get("github_commit_message", defaults["commit_message"]).strip(),
+                pr_title=st.session_state.get("github_pr_title", defaults["pr_title"]).strip(),
+            )
+            st.session_state["github_publish_result"] = publish_result
+            st.session_state["analysis_result"]["github_publish_result"] = publish_result
+            st.session_state["pending_main_section"] = "AI Code Review"
+            st.rerun()
+        except Exception as exc:
+            st.session_state["github_publish_error"] = str(exc)
+            st.rerun()
+
+
+def summarize_forward_engineering_artifacts(output: dict | None) -> int:
+    if not isinstance(output, dict):
+        return 0
+    return (
+        len(output.get("angular_files", []))
+        + len(output.get("angular_test_files", []))
+        + len(output.get("nodejs_files", []))
+        + len(output.get("nodejs_test_files", []))
+        + len(output.get("postgres_files", []))
+    )
+
+
+def format_elapsed_from_logs(logs: list[dict]) -> str:
+    if len(logs) < 2:
+        return "Just started"
+    timestamps: list[datetime] = []
+    for entry in logs:
+        raw = entry.get("timestamp")
+        if not isinstance(raw, str):
+            continue
+        try:
+            timestamps.append(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    if len(timestamps) < 2:
+        return "In progress"
+    elapsed = max((max(timestamps) - min(timestamps)).total_seconds(), 0)
+    minutes, seconds = divmod(int(elapsed), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _approval_status_for_dashboard(state: dict, approval_name: str) -> str:
+    if approval_name == "requirements":
+        document = state.get("approved_requirements") or state.get("requirements_draft")
+        return get_approval_status(document, PENDING_SME_APPROVAL)
+    document = state.get("approved_technical_spec") or state.get("technical_spec_draft")
+    return get_approval_status(document, PENDING_ARCHITECT_APPROVAL)
+
+
+def _latest_log_entry(logs: list[dict], agent_name: str) -> dict:
+    for entry in reversed(logs):
+        if entry.get("agent") == agent_name:
+            return entry
+    return {}
+
+
+def _is_active_running_log(entry: dict) -> bool:
+    message = str(entry.get("message", "")).strip().lower()
+    if not message:
+        return False
+    terminal_markers = ("complete", "completed", "skipped", "reused", "cache hit", "approved", "rejected")
+    return not any(marker in message for marker in terminal_markers)
+
+
+def _approval_detail(state: dict, approval_name: str) -> str:
+    if approval_name == "requirements":
+        document = state.get("approved_requirements") or state.get("requirements_draft") or {}
+        role = "SME"
+    else:
+        document = state.get("approved_technical_spec") or state.get("technical_spec_draft") or {}
+        role = "Architect"
+    approval = document.get("approval", {}) if isinstance(document, dict) else {}
+    status = approval.get("status", "")
+    approved_on = approval.get("approved_on", "")
+    comments = approval.get("review_comments", "")
+    if status and "APPROVED" in str(status):
+        return f"Approved by {role}{f' on {approved_on}' if approved_on else ''}."
+    if status and "REJECTED" in str(status):
+        return comments or f"Rejected by {role}."
+    if document:
+        return f"Awaiting {role} approval."
+    return f"Pending {role} review."
+
+
+def _dashboard_stage_status(stage: dict, state: dict, live: bool = False) -> tuple[str, str]:
+    logs = state.get("logs", [])
+    latest_entry = _latest_log_entry(logs, stage["key"])
+    stage_key = stage["key"]
+    if stage.get("approval") == "requirements":
+        approval_status = _approval_status_for_dashboard(state, "requirements")
+        if approval_status == SME_APPROVED:
+            return "done", "Complete"
+        if state.get("requirements_draft"):
+            return "pending", "Pending"
+        if live and _is_active_running_log(_latest_log_entry(logs, "requirements")):
+            return "running", "Running"
+        return "pending", "Pending"
+
+    if stage.get("approval") == "technical_spec":
+        approval_status = _approval_status_for_dashboard(state, "technical_spec")
+        if approval_status == ARCHITECT_APPROVED:
+            return "done", "Complete"
+        if state.get("technical_spec_draft"):
+            return "pending", "Pending"
+        if live and _is_active_running_log(_latest_log_entry(logs, "technical_spec")):
+            return "running", "Running"
+        return "pending", "Pending"
+
+    if all(state.get(key) for key in stage.get("result_keys", [])):
+        return "done", "Complete"
+    if stage_key == "forward_engineering_proof":
+        if state.get("forward_comparison_items"):
+            return "done", "Complete"
+        if state.get("forward_engineering_output"):
+            return "pending", "Pending"
+        return "pending", "Pending"
+    if stage_key == "technical_spec" and _approval_status_for_dashboard(state, "requirements") != SME_APPROVED:
+        return "pending", "Pending"
+    if stage_key == "forward_engineering":
+        if _approval_status_for_dashboard(state, "requirements") != SME_APPROVED:
+            return "pending", "Pending"
+        if _approval_status_for_dashboard(state, "technical_spec") != ARCHITECT_APPROVED:
+            return "pending", "Pending"
+    if stage_key in {"data_mapping", "validation"} and not state.get("forward_engineering_output"):
+        return "pending", "Pending"
+    if live and _is_active_running_log(latest_entry):
+        return "running", "Running"
+    return "pending", "Pending"
+
+
+def build_dashboard_rows(state: dict, live: bool = False) -> list[dict]:
+    logs = state.get("logs", [])
+    rows: list[dict] = []
+    for stage in DASHBOARD_STAGES:
+        status_key, status_label = _dashboard_stage_status(stage, state, live=live)
+        detail = _latest_stage_message(logs, stage["key"])
+        if stage.get("approval"):
+            detail = _approval_detail(state, stage["approval"])
+        elif not detail and status_key == "done":
+            detail = "Completed."
+        elif not detail and status_key == "pending":
+            detail = "Pending."
+        rows.append(
+            {
+                "stage": stage["label"],
+                "status_key": status_key,
+                "status": status_label,
+                "detail": detail,
+                "detail_section": stage.get("detail_section", ""),
+                "approval": stage.get("approval", ""),
+            }
+        )
+    return rows
+
+
+def _latest_stage_message(logs: list[dict], stage_key: str) -> str:
+    for entry in reversed(logs):
+        if entry.get("agent") == stage_key:
+            return entry.get("message", "")
+    return ""
+
+
+def render_dashboard_metric(label: str, value: str, copy: str) -> None:
+    st.markdown(
+        f"""
+        <div class="dashboard-mini-metric">
+            <div class="dashboard-mini-label">{label}</div>
+            <div class="dashboard-mini-value">{value}</div>
+            <div class="dashboard-mini-copy">{copy}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_dashboard_snapshot(snapshot_rows: list[dict]) -> None:
+    rows_markup = "".join(
+        f"""
+        <div class="dashboard-list-row">
+            <div class="dashboard-list-key">{row['metric']}</div>
+            <div class="dashboard-list-value">{row['value']}</div>
+        </div>
+        """
+        for row in snapshot_rows
+    )
+    st.markdown(
+        f"""
+        <div class="dashboard-list-card">
+            <div class="section-title">Run Snapshot</div>
+            {rows_markup}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_dashboard_events(logs: list[dict], limit: int = 6) -> None:
+    if not logs:
+        st.info("The dashboard will populate as soon as execution begins.")
+        return
+
+    for entry in logs[-limit:]:
+        timestamp = entry.get("timestamp", "")
+        try:
+            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).strftime("%H:%M:%S")
+        except ValueError:
+            pass
+        st.markdown(
+            f"""
+            <div class="dashboard-event">
+                <div class="dashboard-event-meta">{timestamp} | {entry.get('agent', 'system')}</div>
+                <div class="dashboard-event-copy">{entry.get('message', '')}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def go_to_dashboard_approval_section(section_name: str) -> None:
+    st.session_state["active_main_section"] = section_name
+    st.rerun()
+
+
+def run_final_data_mapping_from_workspace(
+    result: dict,
+    generated_target: dict,
+    legacy_data_dictionary_folder: str,
+    target_data_dictionary_folder: str,
+) -> None:
+    st.session_state["data_mapping_error"] = None
+    st.session_state["ai_code_review_result"] = None
+    st.session_state["ai_code_review_error"] = None
+    generated_sql_folder = str(Path(generated_target.get("generated_root", "")) / "sql")
+    with st.spinner("Running final data mapping analysis on the generated target..."):
+        data_mapping_result = data_mapping_agent.run(
+            legacy_spec=result.get("legacy_spec", {}),
+            target_spec=result.get("target_spec", {}),
+            generated_code_folder=generated_target.get("generated_root", ""),
+            generated_sql_folder=generated_sql_folder,
+            legacy_data_dictionary_folder=legacy_data_dictionary_folder,
+            target_data_dictionary_folder=target_data_dictionary_folder,
+            logger=lambda _a, _m: None,
+        )
+    st.session_state["data_mapping_result"] = data_mapping_result
+    st.session_state["analysis_result"]["data_mapping_result"] = data_mapping_result
+    st.session_state["pending_main_section"] = "Final Data Mapping"
+    st.rerun()
+
+
+def run_validation_from_workspace(
+    result: dict,
+    requirements_draft: dict,
+    technical_spec_draft: dict,
+    generated_target: dict,
+) -> None:
+    st.session_state["validation_error"] = None
+    st.session_state["ai_code_review_result"] = None
+    st.session_state["ai_code_review_error"] = None
+    with st.spinner("Running validation on generated target artifacts..."):
+        validation_result = validation_agent.run(
+            legacy_spec=result.get("legacy_spec", {}),
+            requirements=requirements_draft,
+            technical_spec=technical_spec_draft,
+            generated_files=generated_target.get("generated_files", []),
+            logger=lambda _a, _m: None,
+        )
+    st.session_state["validation_result"] = validation_result
+    st.session_state["analysis_result"]["validation_result"] = validation_result
+    st.session_state["pending_main_section"] = "Validation"
+    st.rerun()
+
+
+def render_dashboard_stage_cards(rows: list[dict], live: bool = False) -> None:
+    current_state = st.session_state.get("analysis_result", {})
+    stage_rows = [rows[i : i + 4] for i in range(0, len(rows), 4)]
+    for group_index, row_group in enumerate(stage_rows):
+        cols = st.columns(4)
+        for index, row in enumerate(row_group):
+            with cols[index]:
+                detail = row["detail"] or "No updates yet."
+                st.markdown(
+                    f"""
+                    <div class="dashboard-stage">
+                        <div class="dashboard-stage-shell">
+                            <div class="dashboard-stage-main">
+                                <span class="dashboard-badge {row['status_key']}">{row['status']}</span>
+                                <div class="dashboard-stage-label">{row['stage']}</div>
+                                <div class="dashboard-stage-copy">{detail}</div>
+                            </div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if not live and row.get("detail_section"):
+                    st.markdown('<div class="dashboard-card-action">', unsafe_allow_html=True)
+                    button_key = f"dashboard_open_{group_index}_{index}_{row['stage']}"
+                    if st.button("↗ Details", key=button_key, use_container_width=True):
+                        st.session_state["active_main_section"] = row["detail_section"]
+                        st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+                if (
+                    not live
+                    and row.get("approval") == "requirements"
+                    and row["status_key"] == "pending"
+                    and current_state.get("requirements_draft")
+                ):
+                    st.markdown('<div class="dashboard-card-action">', unsafe_allow_html=True)
+                    if st.button("✓ Review", key=f"dashboard_approve_req_{group_index}_{index}", use_container_width=True):
+                        go_to_dashboard_approval_section("Requirements Draft")
+                    st.markdown("</div>", unsafe_allow_html=True)
+                if (
+                    not live
+                    and row.get("approval") == "technical_spec"
+                    and row["status_key"] == "pending"
+                    and current_state.get("technical_spec_draft")
+                ):
+                    st.markdown('<div class="dashboard-card-action">', unsafe_allow_html=True)
+                    if st.button("✓ Review", key=f"dashboard_approve_tech_{group_index}_{index}", use_container_width=True):
+                        go_to_dashboard_approval_section("Technical Specification Draft")
+                    st.markdown("</div>", unsafe_allow_html=True)
+        for empty_index in range(len(row_group), 4):
+            cols[empty_index].empty()
+
+
+def dashboard_mapping_analysis(state: dict) -> dict:
+    data_mapping_result = state.get("data_mapping_result") or {}
+    if not isinstance(data_mapping_result, dict):
+        return {}
+    mapping_analysis = data_mapping_result.get("mapping_analysis", {})
+    return mapping_analysis if isinstance(mapping_analysis, dict) else {}
+
+
+def dashboard_validation_summary(state: dict) -> dict:
+    validation_result = state.get("validation_result") or {}
+    if not isinstance(validation_result, dict):
+        return {}
+    summary = validation_result.get("summary", {})
+    return summary if isinstance(summary, dict) else {}
+
+
+def compute_dashboard_readiness(state: dict) -> dict:
+    gap_analysis = state.get("gap_analysis", {}) or {}
+    mapping_analysis = dashboard_mapping_analysis(state)
+    mapping_summary = mapping_analysis.get("summary", {}) if isinstance(mapping_analysis, dict) else {}
+    validation_summary = dashboard_validation_summary(state)
+    requirements_status = _approval_status_for_dashboard(state, "requirements")
+    technical_status = _approval_status_for_dashboard(state, "technical_spec")
+
+    business_readiness = 100
+    if gap_analysis.get("missing_features"):
+        business_readiness -= min(40, len(gap_analysis.get("missing_features", [])) * 6)
+    if requirements_status != SME_APPROVED:
+        business_readiness -= 20
+
+    technical_readiness = 100
+    if technical_status != ARCHITECT_APPROVED:
+        technical_readiness -= 30
+    if not state.get("forward_engineering_output"):
+        technical_readiness -= 25
+    technical_readiness -= min(25, int(validation_summary.get("difference_count", 0)) * 4)
+
+    data_readiness = 100
+    data_readiness -= min(40, int(mapping_summary.get("unmapped_columns_count", 0)) * 6)
+    data_readiness -= min(25, len(mapping_analysis.get("data_quality_risks", [])) * 5)
+    if not state.get("data_mapping_result"):
+        data_readiness -= 25
+
+    compliance_readiness = 100
+    compliance_readiness -= min(45, len(gap_analysis.get("compliance_gaps", [])) * 10)
+    compliance_readiness -= min(20, len(gap_analysis.get("risks", [])) * 4)
+
+    testing_readiness = 100
+    if not state.get("validation_result"):
+        testing_readiness -= 35
+    testing_readiness -= min(35, int(validation_summary.get("difference_count", 0)) * 5)
+    testing_readiness += min(10, len((state.get("forward_engineering_output") or {}).get("test_cases", [])))
+
+    areas = {
+        "Business Readiness": max(0, min(100, business_readiness)),
+        "Technical Readiness": max(0, min(100, technical_readiness)),
+        "Data Readiness": max(0, min(100, data_readiness)),
+        "Compliance Readiness": max(0, min(100, compliance_readiness)),
+        "Testing Readiness": max(0, min(100, testing_readiness)),
+    }
+    overall_score = round(sum(areas.values()) / len(areas)) if areas else 0
+    if overall_score >= 80:
+        health = "Green"
+        wave_status = "Release candidate"
+    elif overall_score >= 60:
+        health = "Amber"
+        wave_status = "Wave candidate with follow-ups"
+    else:
+        health = "Red"
+        wave_status = "Not ready for release"
+    return {"areas": areas, "overall_score": overall_score, "health": health, "wave_status": wave_status}
+
+
+def build_blockers_and_risks(state: dict) -> list[dict]:
+    blockers: list[dict] = []
+    gap_analysis = state.get("gap_analysis", {}) or {}
+    if _approval_status_for_dashboard(state, "requirements") != SME_APPROVED:
+        blockers.append({"type": "Approval", "severity": "High", "item": "BRD pending SME approval"})
+    if _approval_status_for_dashboard(state, "technical_spec") != ARCHITECT_APPROVED:
+        blockers.append({"type": "Approval", "severity": "High", "item": "Technical spec pending architect approval"})
+    for item in gap_analysis.get("compliance_gaps", [])[:3]:
+        blockers.append({"type": "Compliance", "severity": "High", "item": str(item)})
+    for risk in gap_analysis.get("risks", [])[:4]:
+        if isinstance(risk, dict):
+            blockers.append(
+                {
+                    "type": "Risk",
+                    "severity": risk.get("risk_level", "Medium"),
+                    "item": risk.get("risk_name", risk.get("description", "Open risk")),
+                }
+            )
+        else:
+            blockers.append({"type": "Risk", "severity": "Medium", "item": str(risk)})
+    return blockers
+
+
+def build_delivery_progress_rows(state: dict) -> list[dict]:
+    mapping_analysis = dashboard_mapping_analysis(state)
+    mapping_summary = mapping_analysis.get("summary", {}) if isinstance(mapping_analysis, dict) else {}
+    validation_summary = dashboard_validation_summary(state)
+    rows = []
+    for row in build_dashboard_rows(state):
+        progress = 100 if row["status_key"] == "done" else 75 if row["status_key"] == "ready" else 50 if row["status_key"] == "running" else 0
+        rows.append({"step": row["stage"], "status": row["status"], "progress_%": progress})
+    rows.extend(
+        [
+            {"step": "Gap Closure Status", "status": f"{len((state.get('gap_analysis') or {}).get('missing_features', []))} gaps open", "progress_%": max(0, 100 - len((state.get("gap_analysis") or {}).get("missing_features", [])) * 10)},
+            {"step": "Data Mapping Coverage", "status": f"{to_float(mapping_summary.get('mapping_coverage', 0.0)):.0%}", "progress_%": round(to_float(mapping_summary.get("mapping_coverage", 0.0)) * 100)},
+            {"step": "Validation Sync", "status": validation_summary.get("overall_status", "not_run"), "progress_%": round(to_float(validation_summary.get("sync_score", 0.0)) * 100)},
+        ]
+    )
+    return rows
+
+
+def build_country_readiness_rows(state: dict) -> list[dict]:
+    gap_analysis = state.get("gap_analysis", {}) or {}
+    legacy_spec = state.get("legacy_spec", {}) or {}
+    country_names = {
+        str(item.get("country", "")).strip()
+        for item in legacy_spec.get("country_specific_rules", [])
+        if isinstance(item, dict) and str(item.get("country", "")).strip()
+    }
+    missed_by_country: dict[str, int] = {}
+    for item in gap_analysis.get("country_specific_rules_missed", []):
+        if not isinstance(item, dict):
+            continue
+        country = str(item.get("country", "")).strip() or "Unspecified"
+        country_names.add(country)
+        missed_by_country[country] = missed_by_country.get(country, 0) + 1
+    rows = []
+    for country in sorted(country_names):
+        missed = missed_by_country.get(country, 0)
+        readiness = max(0, 100 - missed * 25)
+        rows.append({"country": country, "rules_missed": missed, "readiness_%": readiness, "status": "Ready" if readiness >= 75 else "Needs attention"})
+    return rows
+
+
+def build_module_readiness_rows(state: dict) -> list[dict]:
+    output = state.get("forward_engineering_output", {}) or {}
+    validation_summary = dashboard_validation_summary(state)
+    rows = [
+        {"module": "Frontend", "artifacts": len(output.get("angular_files", [])), "status": "Ready" if output.get("angular_files") else "Pending"},
+        {"module": "Frontend Tests", "artifacts": len(output.get("angular_test_files", [])), "status": "Ready" if output.get("angular_test_files") else "Pending"},
+        {"module": "Backend", "artifacts": len(output.get("nodejs_files", [])), "status": "Ready" if output.get("nodejs_files") else "Pending"},
+        {"module": "Backend Tests", "artifacts": len(output.get("nodejs_test_files", [])), "status": "Ready" if output.get("nodejs_test_files") else "Pending"},
+        {"module": "Database", "artifacts": len(output.get("postgres_files", [])), "status": "Ready" if output.get("postgres_files") else "Pending"},
+        {"module": "Validation", "artifacts": int(validation_summary.get("difference_count", 0)), "status": validation_summary.get("overall_status", "not_run")},
+    ]
+    return rows
+
+
+def build_file_generation_rows(state: dict) -> list[dict]:
+    items = state.get("forward_comparison_items", []) or []
+    rows = []
+    for item in items:
+        rows.append(
+            {
+                "file_name": item.get("file_name", ""),
+                "status": item.get("status", ""),
+                "module": str(item.get("group", "")).replace("_files", "").upper(),
+                "path": item.get("generated_relative_path", ""),
+                "requirements": ", ".join(str(req) for req in item.get("related_requirement_ids", [])),
+            }
+        )
+    return rows
+
+
+def render_migration_dashboard(state: dict, live: bool = False) -> None:
+    logs = state.get("logs", [])
+    rows = build_dashboard_rows(state, live=live)
+    done_count = sum(1 for row in rows if row["status_key"] == "done")
+    action_count = sum(1 for row in rows if row.get("approval") and row["status_key"] == "pending")
+    progress_ratio = done_count / len(rows) if rows else 0.0
+    forward_output = state.get("forward_engineering_output", {})
+    validation_result = state.get("validation_result") or {}
+    mapping_analysis = dashboard_mapping_analysis(state)
+    mapping_summary = mapping_analysis.get("summary", {}) if isinstance(mapping_analysis, dict) else {}
+    validation_summary = dashboard_validation_summary(state)
+    readiness = compute_dashboard_readiness(state)
+    blockers = build_blockers_and_risks(state)
+    generated_count = summarize_forward_engineering_artifacts(forward_output)
+    dashboard_title = "Live Migration Command Center" if live else "Migration Command Center"
+    dashboard_copy = (
+        "Streaming workflow telemetry, approval checkpoints, and generated asset readiness."
+        if live
+        else "A consolidated view of execution progress, review gates, and migration delivery readiness."
+    )
+    st.markdown(
+        f"""
+        <div class="dashboard-hero">
+            <div class="dashboard-kicker">Migration Dashboard</div>
+            <div class="dashboard-title">{dashboard_title}</div>
+            <div class="dashboard-subtitle">{dashboard_copy}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    has_readiness_evidence = any(
+        state.get(key)
+        for key in [
+            "logs",
+            "legacy_code_reverse_spec",
+            "legacy_sql_reverse_spec",
+            "legacy_spec",
+            "target_code_reverse_spec",
+            "target_sql_reverse_spec",
+            "target_spec",
+            "gap_analysis",
+            "requirements_draft",
+            "technical_spec_draft",
+            "forward_engineering_output",
+            "validation_result",
+            "data_mapping_result",
+        ]
+    )
+
+    progress_text = "Live migration execution" if live else "Migration readiness"
+    if has_readiness_evidence:
+        st.progress(progress_ratio, text=f"{progress_text}: {progress_ratio:.0%}")
+    else:
+        st.caption("Readiness percentages appear after analysis begins.")
+
+    snapshot_rows = [
+        {"metric": "Elapsed", "value": format_elapsed_from_logs(logs)},
+        {"metric": "Log Events", "value": len(logs)},
+        {"metric": "Open Blockers", "value": len(blockers)},
+        {"metric": "Generated Assets", "value": generated_count},
+        {"metric": "Validation Differences", "value": validation_summary.get("difference_count", 0)},
+        {"metric": "Mapped Columns", "value": mapping_summary.get("mapped_columns_count", 0)},
+    ]
+    executive_tab, delivery_tab, data_tab, validation_tab, drilldown_tab = st.tabs(
+        ["Executive Summary", "Delivery Progress", "Data Migration", "Validation and Defects", "Drilldowns"]
+    )
+
+    with executive_tab:
+        top_left, top_right = st.columns([2, 3])
+        with top_left:
+            render_dashboard_snapshot(snapshot_rows)
+        with top_right:
+            st.markdown("**Executive Phase View**")
+            render_dashboard_stage_cards(rows, live=live)
+            st.markdown("**Recent Events**")
+            render_dashboard_events(logs, limit=5 if live else 7)
+
+    with delivery_tab:
+        progress_left, progress_right = st.columns([3, 2])
+        with progress_left:
+            st.markdown("**Delivery Progress**")
+            render_table(build_delivery_progress_rows(state), "No delivery progress available.")
+        with progress_right:
+            delivery_rows = [
+                {"metric": "BRD Approval", "value": _approval_status_for_dashboard(state, "requirements")},
+                {"metric": "Tech Spec Approval", "value": _approval_status_for_dashboard(state, "technical_spec")},
+                {"metric": "Forward Engineering", "value": "Complete" if state.get("forward_engineering_output") else "Pending"},
+                {"metric": "Data Mapping", "value": "Complete" if state.get("data_mapping_result") else "Pending"},
+                {"metric": "Validation", "value": validation_summary.get("overall_status", "not_run")},
+                {"metric": "Test Cases", "value": len(forward_output.get("test_cases", []))},
+            ]
+            render_dashboard_snapshot(delivery_rows)
+
+    with data_tab:
+        data_left, data_right = st.columns([3, 2])
+        with data_left:
+            st.markdown("**Data Migration Overview**")
+            data_rows = [
+                {"metric": "Mapped Columns", "value": mapping_summary.get("mapped_columns_count", 0)},
+                {"metric": "Unmapped Columns", "value": mapping_summary.get("unmapped_columns_count", 0)},
+                {"metric": "Transformations Defined", "value": mapping_summary.get("transformation_count", 0)},
+                {"metric": "Reconciliation Rules Defined", "value": mapping_summary.get("reconciliation_rule_count", 0)},
+                {"metric": "Coverage", "value": f"{to_float(mapping_summary.get('mapping_coverage', 0.0)):.0%}"},
+            ]
+            render_table(data_rows, "No data migration metrics available.")
+            st.markdown("**Reconciliation Progress**")
+            render_table(mapping_analysis.get("reconciliation_approach", []), "No reconciliation approach generated.")
+        with data_right:
+            st.markdown("**Migration Risks**")
+            render_table(mapping_analysis.get("data_quality_risks", []), "No data quality risks detected.")
+            st.markdown("**Unmapped Fields**")
+            render_table(mapping_analysis.get("unmapped_legacy_fields", []), "No unmapped legacy fields detected.")
+
+    with validation_tab:
+        validation_left, validation_right = st.columns([2, 3])
+        with validation_left:
+            validation_rows = [
+                {"metric": "Overall Status", "value": validation_summary.get("overall_status", "not_run")},
+                {"metric": "Sync Score", "value": f"{to_float(validation_summary.get('sync_score', 0.0)):.0%}"},
+                {"metric": "Total Issues", "value": validation_summary.get("difference_count", 0)},
+                {"metric": "Open Suggestions", "value": validation_summary.get("suggestion_count", 0)},
+                {"metric": "Generated Inconsistencies", "value": len(validation_result.get("differences", []))},
+            ]
+            render_dashboard_snapshot(validation_rows)
+        with validation_right:
+            st.markdown("**Validation and Defects**")
+            render_table(validation_result.get("differences", []), "No validation defects detected.")
+            st.markdown("**Recommended Actions**")
+            render_table(validation_result.get("suggestions", []), "No corrective actions suggested.")
+
+    with drilldown_tab:
+        drill_tabs = st.tabs(["By Country", "By Module", "By Generated File", "By Workflow Step"])
+        with drill_tabs[0]:
+            render_table(build_country_readiness_rows(state), "No country-specific readiness indicators available.")
+        with drill_tabs[1]:
+            render_table(build_module_readiness_rows(state), "No module-level readiness indicators available.")
+        with drill_tabs[2]:
+            render_table(build_file_generation_rows(state), "No generated file status available.")
+        with drill_tabs[3]:
+            workflow_rows = []
+            for row in rows:
+                workflow_rows.append({"workflow_step": row["stage"], "status": row["status"], "latest_update": row["detail"] or ""})
+            render_table(workflow_rows, "No workflow-step detail available.")
+
+
 def deep_copy_document(document: dict | None) -> dict:
     if not isinstance(document, dict):
         return {}
@@ -633,6 +1987,14 @@ def init_approval_state() -> None:
     st.session_state.setdefault("validation_error", None)
     st.session_state.setdefault("data_mapping_result", None)
     st.session_state.setdefault("data_mapping_error", None)
+    st.session_state.setdefault("ai_code_review_result", None)
+    st.session_state.setdefault("ai_code_review_error", None)
+    st.session_state.setdefault("github_publish_result", None)
+    st.session_state.setdefault("github_publish_error", None)
+    st.session_state.setdefault("github_base_branch", "main")
+    st.session_state.setdefault("github_branch_name", "")
+    st.session_state.setdefault("github_commit_message", "")
+    st.session_state.setdefault("github_pr_title", "")
     st.session_state.setdefault("pending_main_section", "")
     st.session_state.setdefault("show_analysis_workspace", False)
 
@@ -1209,19 +2571,30 @@ def render_forward_engineering_document(output: dict) -> None:
     top1.metric("Angular Files", len(output.get("angular_files", [])))
     top2.metric("Node.js Files", len(output.get("nodejs_files", [])))
     top3.metric("PostgreSQL Files", len(output.get("postgres_files", [])))
-    top4.metric("Test Cases", len(output.get("test_cases", [])))
+    top4.metric("Test Assets", len(output.get("angular_test_files", [])) + len(output.get("nodejs_test_files", [])))
 
     files_tab, tests_tab, notes_tab = st.tabs(["Generated Files", "Test Cases", "Notes"])
 
     with files_tab:
         st.markdown("**Angular Files**")
         render_table(output.get("angular_files", []), "No Angular files generated.")
+        st.markdown("**Angular Test Files**")
+        render_table(output.get("angular_test_files", []), "No Angular test files generated.")
         st.markdown("**Node.js Files**")
         render_table(output.get("nodejs_files", []), "No Node.js files generated.")
+        st.markdown("**Node.js Test Files**")
+        render_table(output.get("nodejs_test_files", []), "No Node.js test files generated.")
         st.markdown("**PostgreSQL Files**")
         render_table(output.get("postgres_files", []), "No PostgreSQL files generated.")
 
     with tests_tab:
+        st.markdown("**Automated Unit Test Files**")
+        automated_test_rows = [
+            *output.get("angular_test_files", []),
+            *output.get("nodejs_test_files", []),
+        ]
+        render_table(automated_test_rows, "No automated unit test files generated.")
+        st.markdown("**Test Case Catalog**")
         render_table(output.get("test_cases", []), "No test cases generated.")
 
     with notes_tab:
@@ -1295,7 +2668,11 @@ def build_generated_artifact_path(
 
     if group_name == "angular_files":
         return root / "frontend" / "src" / "app" / "quote-generation" / safe_name
+    if group_name == "angular_test_files":
+        return root / "frontend" / "src" / "app" / "quote-generation" / safe_name
     if group_name == "nodejs_files":
+        return root / "backend" / "src" / "services" / safe_name
+    if group_name == "nodejs_test_files":
         return root / "backend" / "src" / "services" / safe_name
     return root / "sql" / safe_name
 
@@ -1322,7 +2699,7 @@ def materialize_forward_engineering_output(output: dict, target_code_folder: str
     seed_generated_target_root(generated_root, target_code_folder, target_sql_folder)
 
     generated_files: list[dict] = []
-    for group_name in ("angular_files", "nodejs_files", "postgres_files"):
+    for group_name in ("angular_files", "angular_test_files", "nodejs_files", "nodejs_test_files", "postgres_files"):
         for item in output.get(group_name, []):
             file_name = item.get("file_name", "")
             if not file_name:
@@ -1467,12 +2844,23 @@ def render_forward_engineering_summary(output: dict, comparison_items: list[dict
     with files_tab:
         st.markdown("**Angular Files**")
         render_table(output.get("angular_files", []), "No Angular files generated.")
+        st.markdown("**Angular Test Files**")
+        render_table(output.get("angular_test_files", []), "No Angular test files generated.")
         st.markdown("**Node.js Files**")
         render_table(output.get("nodejs_files", []), "No Node.js files generated.")
+        st.markdown("**Node.js Test Files**")
+        render_table(output.get("nodejs_test_files", []), "No Node.js test files generated.")
         st.markdown("**PostgreSQL Files**")
         render_table(output.get("postgres_files", []), "No PostgreSQL files generated.")
 
     with tests_tab:
+        st.markdown("**Automated Unit Test Files**")
+        automated_test_rows = [
+            *output.get("angular_test_files", []),
+            *output.get("nodejs_test_files", []),
+        ]
+        render_table(automated_test_rows, "No automated unit test files generated.")
+        st.markdown("**Test Case Catalog**")
         render_table(output.get("test_cases", []), "No test cases generated.")
 
     with notes_tab:
@@ -1537,6 +2925,31 @@ def render_validation_result(validation_result: dict) -> None:
 
     st.markdown("**Suggestions**")
     render_table(validation_result.get("suggestions", []), "No suggestions generated.")
+
+
+def render_ai_code_review_result(ai_code_review_result: dict) -> None:
+    if not ai_code_review_result:
+        st.info("Run AI Code Review after publishing the draft PR to generate and post review findings.")
+        return
+
+    summary = ai_code_review_result.get("summary", {})
+    top1, top2, top3, top4 = st.columns(4)
+    top1.metric("Recommendation", str(summary.get("overall_recommendation", "comment")).replace("_", " ").title())
+    top2.metric("Risk Level", str(summary.get("risk_level", "medium")).title())
+    top3.metric("Findings", str(summary.get("total_findings", 0)))
+    top4.metric("Critical", str(summary.get("critical_findings", 0)))
+
+    notes = summary.get("notes", [])
+    if notes:
+        st.caption(" ".join(str(item) for item in notes))
+
+    findings_tab, strengths_tab, comment_tab = st.tabs(["Findings", "Strengths", "PR Review Comment"])
+    with findings_tab:
+        render_table(ai_code_review_result.get("findings", []), "No review findings were generated.")
+    with strengths_tab:
+        render_table(ai_code_review_result.get("strengths", []), "No strengths were recorded.")
+    with comment_tab:
+        st.code(ai_code_review_result.get("review_comment_markdown", ""), language="markdown")
 
 
 def render_data_mapping_result(data_mapping_result: dict) -> None:
@@ -1787,7 +3200,7 @@ def render_gap(gap_analysis: dict) -> None:
         if comparison_df.empty:
             st.info("No rule comparison data available.")
         else:
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            st.dataframe(sanitize_dataframe_for_display(comparison_df), use_container_width=True, hide_index=True)
 
     with confidence_tab:
         render_table(gap_analysis.get("confidence", {}), "No confidence data available.")
@@ -1820,7 +3233,7 @@ def render_logs(logs: list[dict]) -> None:
         )
 
     with st.expander("Structured Log Table", expanded=False):
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.dataframe(sanitize_dataframe_for_display(log_df), use_container_width=True, hide_index=True)
 
 
 def render_flow_map(flow_map: dict, title: str) -> None:
@@ -2110,15 +3523,217 @@ def render_flow_overview_screen() -> None:
         st.rerun()
 
 
+def render_flow_overview_screen_v2() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        .block-container {
+            max-width: 100% !important;
+        }
+        .overview-hero {
+            border-radius: 28px;
+            padding: 1.65rem 1.75rem;
+            background:
+                radial-gradient(circle at top right, rgba(11, 78, 140, 0.24), transparent 30%),
+                radial-gradient(circle at bottom left, rgba(47, 128, 88, 0.18), transparent 24%),
+                linear-gradient(135deg, #f9fbff 0%, #edf5ff 52%, #f5fbf8 100%);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 24px 42px rgba(15, 23, 42, 0.08);
+            margin-bottom: 1rem;
+        }
+        .overview-title {
+            font-size: 2.3rem;
+            line-height: 1.06;
+            color: #10233b;
+            font-weight: 800;
+            margin: 0.35rem 0 0.55rem 0;
+        }
+        .overview-copy {
+            color: #53677d;
+            font-size: 1rem;
+            line-height: 1.48;
+            max-width: 880px;
+        }
+        .overview-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.38rem 0.74rem;
+            border-radius: 999px;
+            background: rgba(11, 78, 140, 0.09);
+            color: #0b4e8c;
+            font-size: 0.82rem;
+            font-weight: 700;
+            margin-right: 0.45rem;
+            margin-top: 0.6rem;
+        }
+        .overview-band {
+            border-radius: 22px;
+            padding: 1rem 1.08rem;
+            background: rgba(255, 255, 255, 0.86);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 16px 30px rgba(15, 23, 42, 0.05);
+            margin-bottom: 1rem;
+        }
+        .overview-step-card {
+            min-height: 228px;
+            border-radius: 24px;
+            padding: 1.15rem 1.05rem 1rem 1.05rem;
+            color: #10233b;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 18px 32px rgba(15, 23, 42, 0.07);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+        }
+        .overview-step-index {
+            width: 38px;
+            height: 38px;
+            border-radius: 999px;
+            background: rgba(16, 35, 59, 0.93);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.95rem;
+        }
+        .overview-step-name {
+            font-size: 1.02rem;
+            font-weight: 800;
+            line-height: 1.24;
+            margin-top: 0.85rem;
+        }
+        .overview-step-purpose {
+            color: #45596f;
+            font-size: 0.91rem;
+            line-height: 1.42;
+            margin-top: 0.55rem;
+            min-height: 64px;
+        }
+        .overview-step-artifact {
+            margin-top: 0.8rem;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.76);
+            padding: 0.7rem 0.78rem;
+        }
+        .overview-step-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            color: #5f738a;
+            font-weight: 800;
+            margin-bottom: 0.18rem;
+        }
+        .overview-step-value {
+            color: #10233b;
+            font-size: 0.9rem;
+            font-weight: 700;
+            line-height: 1.32;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    hero_left, hero_right = st.columns([5, 1.2])
+    with hero_left:
+        st.markdown(
+            """
+            <div class="overview-hero">
+                <div class="eyebrow">AI Migration Journey</div>
+                <div class="overview-title">Understand the full modernization flow in one glance</div>
+                <div class="overview-copy">
+                    The platform downloads legacy and target code from GitHub, combines that with local SQL analysis, builds approved migration artifacts, generates forward-engineered code and automated tests, validates the result, and finally opens a draft PR with AI-assisted review.
+                </div>
+                <div>
+                    <span class="overview-chip">GitHub Code Snapshots</span>
+                    <span class="overview-chip">Local SQL Reverse Engineering</span>
+                    <span class="overview-chip">Approval Gates</span>
+                    <span class="overview-chip">Generated Code + Tests</span>
+                    <span class="overview-chip">Draft PR + AI Review</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hero_right:
+        if st.button("Start Workspace", type="primary", use_container_width=True):
+            st.session_state["show_analysis_workspace"] = True
+            st.rerun()
+
+    st.markdown(
+        """
+        <div class="overview-band">
+            <div class="section-title">Sequential Stages And Primary Artifacts</div>
+            <div class="muted-copy">Each step below shows its purpose and its main output artifact, so someone new to the platform can immediately understand the sequence and what gets produced at each milestone.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    steps = [
+        {"number": 1, "name": "Legacy Code Snapshot", "purpose": "Download legacy application code from GitHub main into a local working snapshot before reverse engineering.", "artifact": "Local legacy code snapshot", "tone": "linear-gradient(135deg, #f4f9ff 0%, #e5f0ff 100%)"},
+        {"number": 2, "name": "Legacy SQL Reverse", "purpose": "Analyze the local legacy SQL folder to capture procedures, data structures, and rule behavior.", "artifact": "Legacy SQL reverse spec", "tone": "linear-gradient(135deg, #f6fbff 0%, #e8f6ff 100%)"},
+        {"number": 3, "name": "Legacy Canonical Spec", "purpose": "Collate legacy code and SQL findings into one business-readable baseline specification.", "artifact": "Legacy consolidated specification", "tone": "linear-gradient(135deg, #f6fff8 0%, #e7f8ed 100%)"},
+        {"number": 4, "name": "Target Code Snapshot", "purpose": "Download target application code from GitHub main into a local snapshot used for reverse engineering and generation.", "artifact": "Local target code snapshot", "tone": "linear-gradient(135deg, #fff8f1 0%, #ffefdb 100%)"},
+        {"number": 5, "name": "Target SQL Reverse", "purpose": "Analyze the local target SQL folder separately so structural and rule comparisons stay accurate.", "artifact": "Target SQL reverse spec", "tone": "linear-gradient(135deg, #fff9f4 0%, #fff1e4 100%)"},
+        {"number": 6, "name": "Target Canonical Spec", "purpose": "Build the target-side specification and flow view from downloaded code plus local SQL.", "artifact": "Target consolidated specification", "tone": "linear-gradient(135deg, #fffaf6 0%, #fbeedf 100%)"},
+        {"number": 7, "name": "Gap Analysis", "purpose": "Identify missing features, compliance issues, parity gaps, and migration risks across the two systems.", "artifact": "Gap and risk assessment", "tone": "linear-gradient(135deg, #fff6f6 0%, #ffe8e8 100%)"},
+        {"number": 8, "name": "BRD Draft", "purpose": "Turn the gap findings into a migration-ready business requirements draft.", "artifact": "Requirements / BRD draft", "tone": "linear-gradient(135deg, #f8f6ff 0%, #eee8ff 100%)"},
+        {"number": 9, "name": "SME Approval", "purpose": "Pause for business review so the requirements become the approved migration baseline.", "artifact": "Approved requirements", "tone": "linear-gradient(135deg, #f3fbff 0%, #def2ff 100%)"},
+        {"number": 10, "name": "Technical Specification", "purpose": "Generate the target design directly from the approved migration requirements.", "artifact": "Technical specification draft", "tone": "linear-gradient(135deg, #f6fffb 0%, #e3f8ef 100%)"},
+        {"number": 11, "name": "Architect Approval", "purpose": "Pause for architectural review before generation continues.", "artifact": "Approved technical design", "tone": "linear-gradient(135deg, #f8fcff 0%, #e8f2ff 100%)"},
+        {"number": 12, "name": "Forward Engineering", "purpose": "Generate target code and automated unit tests on top of the downloaded target folder structure.", "artifact": "Generated code + unit test assets", "tone": "linear-gradient(135deg, #f4fff9 0%, #dbf6e8 100%)"},
+        {"number": 13, "name": "Forward Engineering Proof", "purpose": "Show added and modified files so reviewers can inspect the generated target candidate before publishing.", "artifact": "Generated diff and proof view", "tone": "linear-gradient(135deg, #fffdf5 0%, #fff5dc 100%)"},
+        {"number": 14, "name": "Final Data Mapping", "purpose": "Measure mapping coverage, reconciliation rules, unmapped fields, and migration data risks.", "artifact": "Data mapping and reconciliation report", "tone": "linear-gradient(135deg, #f7fbff 0%, #e6efff 100%)"},
+        {"number": 15, "name": "Validation", "purpose": "Validate generated target artifacts against source behavior and approved design using the local workspace.", "artifact": "Validation findings and sync score", "tone": "linear-gradient(135deg, #fff8fb 0%, #ffeaf5 100%)"},
+        {"number": 16, "name": "AI Code Review", "purpose": "Run an AI-assisted review over the generated diff and prepare detailed review findings for the PR.", "artifact": "AI review findings", "tone": "linear-gradient(135deg, #f5f8ff 0%, #e7ebff 100%)"},
+        {"number": 17, "name": "Draft PR", "purpose": "Create a new target branch from main, publish only code and test files, and open a draft PR back to main.", "artifact": "Draft GitHub PR", "tone": "linear-gradient(135deg, #f4fffd 0%, #dff6ef 100%)"},
+    ]
+    rows = [steps[i : i + 4] for i in range(0, len(steps), 4)]
+    for row in rows:
+        cols = st.columns(4)
+        for idx, col in enumerate(cols):
+            if idx >= len(row):
+                col.empty()
+                continue
+            step = row[idx]
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="overview-step-card" style="background: {step['tone']};">
+                        <div>
+                            <div class="overview-step-index">{step['number']}</div>
+                            <div class="overview-step-name">{step['name']}</div>
+                            <div class="overview-step-purpose">{step['purpose']}</div>
+                        </div>
+                        <div class="overview-step-artifact">
+                            <div class="overview-step-label">Primary Artifact</div>
+                            <div class="overview-step-value">{step['artifact']}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
 def main() -> None:
     apply_enterprise_theme()
     init_approval_state()
     st.title("AI Powered Migration Platform")
     #st.caption("Reverse engineer legacy and target insurance systems, collate structured specs, and highlight migration gaps.")
 
-    default_legacy_code = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "vb_code")
+    default_legacy_repo = "https://github.com/arkadeep87/SourceVBApp.git"
+    default_legacy_branch = "main"
+    default_legacy_code_root = ""
+    default_legacy_code = str(settings.outputs_dir / "github_snapshots" / "legacy_code")
     default_legacy_sql = str(settings.sample_inputs_dir / "legacy" / "quote_generation" / "sql")
-    default_target_code = str(settings.sample_inputs_dir / "target" / "quote_generation")
+    default_target_repo = "https://github.com/arkadeep87/Target-App.git"
+    default_target_branch = "main"
+    default_target_code_root = ""
+    default_target_code = str(settings.outputs_dir / "github_snapshots" / "target_code")
     default_target_sql = str(settings.sample_inputs_dir / "target" / "quote_generation" / "sql")
     default_legacy_data_dictionary = str(settings.sample_inputs_dir / "data_dictionary" / "legacy")
     default_target_data_dictionary = str(settings.sample_inputs_dir / "data_dictionary" / "target")
@@ -2131,26 +3746,40 @@ def main() -> None:
         st.markdown("## Control Center")
         st.caption("Configure inputs, start the workflow, and review runtime settings.")
         st.markdown("### Legacy Inputs")
-        legacy_code_folder = st.text_input(
-            "Legacy source code root",
-            value=default_legacy_code,
-            help="Point this to the legacy VB code folder. The code reverse pass reads VB/VB.NET files from `vb_code` and ignores SQL.",
+        legacy_repo_url = st.text_input(
+            "Legacy GitHub repo",
+            value=default_legacy_repo,
+            help="GitHub repository URL used to fetch legacy/source code before analysis. The selected branch is downloaded into the local snapshot folder below.",
         )
+        legacy_repo_branch = st.text_input(
+            "Legacy branch",
+            value=default_legacy_branch,
+            help="Branch to download from the legacy/source repository.",
+        )
+        legacy_repo_code_root = default_legacy_code_root
+        legacy_code_folder = default_legacy_code
         legacy_sql_folder = st.text_input(
             "Legacy SQL folder",
             value=default_legacy_sql,
-            help="Point this to the legacy SQL folder only. This is reverse engineered separately from the VB code pass.",
+            help="Local legacy SQL folder. SQL stays local and is not fetched from GitHub or included in PR publishing.",
         )
         st.markdown("### Target Inputs")
-        target_code_folder = st.text_input(
-            "Target source code root",
-            value=default_target_code,
-            help="Point this to the target code root. The code reverse pass will read Angular/Node files and ignore SQL.",
+        target_repo_url = st.text_input(
+            "Target GitHub repo",
+            value=default_target_repo,
+            help="GitHub repository URL used to fetch target code and later publish the generated PR.",
         )
+        target_repo_branch = st.text_input(
+            "Target branch",
+            value=default_target_branch,
+            help="Branch to download from and later use as the PR base branch.",
+        )
+        target_repo_code_root = default_target_code_root
+        target_code_folder = default_target_code
         target_sql_folder = st.text_input(
             "Target SQL folder",
             value=default_target_sql,
-            help="Point this to the target SQL folder only.",
+            help="Local target SQL folder. SQL stays local and is excluded from GitHub PR publishing.",
         )
         st.markdown("### Data Dictionaries")
         legacy_data_dictionary_folder = st.text_input(
@@ -2176,21 +3805,29 @@ def main() -> None:
         )
         run_clicked = st.button("Run Modernization Analysis", type="primary", use_container_width=True)
         st.markdown("### Workflow")
-        st.markdown("- Reverse legacy source code")
-        st.markdown("- Reverse legacy SQL")
-        st.markdown("- Collate legacy canonical specification")
-        st.markdown("- Reverse target source code")
-        st.markdown("- Reverse target SQL")
-        st.markdown("- Collate target canonical specification")
-        st.markdown("- Build graphical flow maps")
-        st.markdown("- Run gap and compliance analysis")
+        st.caption("GitHub code is downloaded into local snapshot folders first. SQL remains local. PR publishing later includes code and generated test files, but excludes SQL.")
+        st.markdown("- Download legacy code from GitHub into a local snapshot")
+        st.markdown("- Download target code from GitHub into a local snapshot")
+        st.markdown("- Reverse legacy code and local legacy SQL")
+        st.markdown("- Collate the legacy canonical specification")
+        st.markdown("- Reverse target code and local target SQL")
+        st.markdown("- Collate the target canonical specification")
+        st.markdown("- Build flow maps and run gap analysis")
+        st.markdown("- Generate the BRD draft and wait for SME approval")
+        st.markdown("- Generate the technical specification and wait for architect approval")
+        st.markdown("- Generate forward-engineered code and automated unit tests")
+        st.markdown("- Review forward-engineering proof, validation, and final data mapping")
+        st.markdown("- Run AI Code Review and post detailed review comments to the PR")
+        st.markdown("- Raise a draft GitHub PR with code and test files only")
         if st.session_state.get("analysis_result"):
             st.success("Latest analysis is loaded in the workspace.")
 
+    legacy_repo_full_name = parse_github_repo_full_name(legacy_repo_url)
+    target_repo_full_name = parse_github_repo_full_name(target_repo_url)
     settings.model = selected_model
     settings.cache_enabled = cache_enabled
     if not st.session_state.get("show_analysis_workspace"):
-        render_flow_overview_screen()
+        render_flow_overview_screen_v2()
         return
     auto_run_analysis = st.session_state.pop("auto_run_analysis", False)
     auto_run_stage = st.session_state.pop("auto_run_stage", "")
@@ -2214,7 +3851,7 @@ def main() -> None:
             """
             <div class="panel-card">
                 <div class="section-title">Launch Ready</div>
-                <div class="muted-copy">Sample folders are preloaded so the platform can be demonstrated immediately.</div>
+                <div class="muted-copy">Code is fetched from GitHub into local snapshots for analysis and generation. SQL remains local for reverse engineering, validation, and mapping.</div>
                 <div style="margin-top: 0.85rem;">
                     <span class="status-chip">Legacy VB.NET</span>
                     <span class="status-chip">Sybase SQL</span>
@@ -2228,9 +3865,14 @@ def main() -> None:
         )
 
     if run_clicked or auto_run_analysis:
+        st.session_state["active_main_section"] = "Migration Dashboard"
         approved_requirements_for_run = st.session_state.get("approved_requirements")
         approved_technical_spec_for_run = st.session_state.get("approved_technical_spec")
         prior_state_for_run = st.session_state.get("analysis_result") if auto_run_analysis else None
+        legacy_repo_full_name = parse_github_repo_full_name(legacy_repo_url)
+        target_repo_full_name = parse_github_repo_full_name(target_repo_url)
+        runtime_legacy_code_folder = legacy_code_folder
+        runtime_target_code_folder = target_code_folder
 
         if run_clicked and not auto_run_analysis:
             approved_requirements_for_run = None
@@ -2243,24 +3885,53 @@ def main() -> None:
             st.session_state["validation_error"] = None
             st.session_state["data_mapping_result"] = None
             st.session_state["data_mapping_error"] = None
+            st.session_state["ai_code_review_result"] = None
+            st.session_state["ai_code_review_error"] = None
+            st.session_state["github_publish_result"] = None
+            st.session_state["github_publish_error"] = None
+            st.session_state["github_branch_name"] = ""
+            st.session_state["github_commit_message"] = ""
+            st.session_state["github_pr_title"] = ""
 
         st.session_state.pop("analysis_error", None)
         st.session_state.pop("analysis_trace_dir", None)
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
+        live_dashboard_placeholder = st.empty()
         live_logs_placeholder = st.empty()
         trace_dir = create_run_trace_dir()
         st.session_state["analysis_trace_dir"] = str(trace_dir)
         try:
+            if not legacy_repo_full_name:
+                raise RuntimeError("Unable to parse the legacy GitHub repository URL.")
+            if not target_repo_full_name:
+                raise RuntimeError("Unable to parse the target GitHub repository URL.")
+            status_placeholder.info("Downloading legacy and target code from GitHub into local snapshots.")
+            runtime_legacy_code_folder = github_fetch_repo_code_snapshot(
+                repo_full_name=legacy_repo_full_name,
+                branch=legacy_repo_branch,
+                code_root=legacy_repo_code_root,
+                destination=legacy_code_folder,
+            )
+            runtime_target_code_folder = github_fetch_repo_code_snapshot(
+                repo_full_name=target_repo_full_name,
+                branch=target_repo_branch,
+                code_root=target_repo_code_root,
+                destination=target_code_folder,
+            )
             progress_bar = progress_placeholder.progress(0, text="Initializing modernization workflow...")
             status_placeholder.info("Preparing artifact discovery and analysis context.")
             write_json_trace(
                 trace_dir / "run_context.json",
                 {
                     "started_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-                    "legacy_code_folder": legacy_code_folder,
+                    "legacy_repo": legacy_repo_full_name,
+                    "legacy_branch": legacy_repo_branch,
+                    "legacy_code_folder": runtime_legacy_code_folder,
                     "legacy_sql_folder": legacy_sql_folder,
-                    "target_code_folder": target_code_folder,
+                    "target_repo": target_repo_full_name,
+                    "target_branch": target_repo_branch,
+                    "target_code_folder": runtime_target_code_folder,
                     "target_sql_folder": target_sql_folder,
                     "model": settings.model,
                     "cache_enabled": settings.cache_enabled,
@@ -2285,9 +3956,9 @@ def main() -> None:
                 )
             else:
                 workflow_stream = stream_workflow(
-                    legacy_code_folder=legacy_code_folder,
+                    legacy_code_folder=runtime_legacy_code_folder,
                     legacy_sql_folder=legacy_sql_folder,
-                    target_code_folder=target_code_folder,
+                    target_code_folder=runtime_target_code_folder,
                     target_sql_folder=target_sql_folder,
                     approved_requirements=approved_requirements_for_run,
                     approved_technical_spec=approved_technical_spec_for_run,
@@ -2298,6 +3969,9 @@ def main() -> None:
                 result = partial_state
                 write_run_trace_snapshot(trace_dir, partial_state, "running")
                 logs = partial_state.get("logs", [])
+                with live_dashboard_placeholder.container():
+                    st.markdown("### Live Migration Dashboard")
+                    render_migration_dashboard(partial_state, live=True)
                 render_live_execution_status(live_logs_placeholder, logs)
                 seen = {entry.get("agent") for entry in logs}
                 completed = sum(1 for key, _label in WORKFLOW_PHASES if key in seen)
@@ -2314,11 +3988,15 @@ def main() -> None:
             st.session_state["analysis_result"] = result
             sync_approval_state_from_result(result)
             finalize_run_trace(trace_dir, result)
+            live_dashboard_placeholder.empty()
+            live_logs_placeholder.empty()
             progress_bar.progress(100, text="Analysis complete.")
             status_placeholder.success(f"Modernization analysis completed successfully. Trace saved to {trace_dir}")
         except Exception as exc:
             st.session_state["analysis_error"] = str(exc)
             write_error_trace(trace_dir, str(exc), result if "result" in locals() else {})
+            live_dashboard_placeholder.empty()
+            live_logs_placeholder.empty()
             status_placeholder.error(f"Analysis failed. Trace saved to {trace_dir}")
 
     if st.session_state.get("analysis_error"):
@@ -2354,6 +4032,9 @@ def main() -> None:
     persisted_data_mapping_result = result.get("data_mapping_result")
     if st.session_state.get("data_mapping_result") is None and persisted_data_mapping_result:
         st.session_state["data_mapping_result"] = persisted_data_mapping_result
+    persisted_ai_code_review_result = result.get("ai_code_review_result")
+    if st.session_state.get("ai_code_review_result") is None and persisted_ai_code_review_result:
+        st.session_state["ai_code_review_result"] = persisted_ai_code_review_result
 
     workflow_excel_bytes = build_workflow_excel_export(result)
 
@@ -2372,8 +4053,18 @@ def main() -> None:
             target_code_folder,
             target_sql_folder,
         )
+        publish_defaults = build_publish_defaults(result, target_repo_branch)
+        if not st.session_state.get("github_branch_name"):
+            st.session_state["github_branch_name"] = publish_defaults["branch_name"]
+        if not st.session_state.get("github_base_branch"):
+            st.session_state["github_base_branch"] = publish_defaults["base_branch"]
+        if not st.session_state.get("github_commit_message"):
+            st.session_state["github_commit_message"] = publish_defaults["commit_message"]
+        if not st.session_state.get("github_pr_title"):
+            st.session_state["github_pr_title"] = publish_defaults["pr_title"]
 
     section_options = [
+        "Migration Dashboard",
         "Overview",
         "Step Outputs",
         "Legacy Spec",
@@ -2387,12 +4078,14 @@ def main() -> None:
         "Forward Engineering Proof",
         "Final Data Mapping",
         "Validation",
+        "AI Code Review",
         "Execution Logs",
         "Raw JSON",
     ]
     pending_main_section = st.session_state.pop("pending_main_section", "")
     if pending_main_section in section_options:
         st.session_state["active_main_section"] = pending_main_section
+    st.session_state.setdefault("active_main_section", "Migration Dashboard")
     st.markdown("**Workspace Sections**")
     if openpyxl is None:
         st.info("Install `openpyxl` to enable the Excel export of workflow outputs.")
@@ -2405,15 +4098,30 @@ def main() -> None:
             key="download_workflow_excel",
             use_container_width=False,
         )
-    active_section = st.radio(
-        "Workspace Sections",
-        options=section_options,
-        key="active_main_section",
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+    active_section = st.session_state.get("active_main_section", "Migration Dashboard")
+    if active_section not in section_options:
+        active_section = "Migration Dashboard"
+        st.session_state["active_main_section"] = active_section
 
-    if active_section == "Overview":
+    if active_section != "Migration Dashboard":
+        nav_left, nav_right = st.columns([1, 5])
+        with nav_left:
+            if st.button("Back to Dashboard", use_container_width=True):
+                st.session_state["active_main_section"] = "Migration Dashboard"
+                st.rerun()
+        with nav_right:
+            st.caption(f"Detail View: {active_section}")
+
+    if active_section == "Migration Dashboard":
+        dashboard_state = dict(result)
+        dashboard_state["validation_result"] = st.session_state.get("validation_result") or result.get("validation_result")
+        dashboard_state["data_mapping_result"] = st.session_state.get("data_mapping_result") or result.get("data_mapping_result")
+        dashboard_state["ai_code_review_result"] = st.session_state.get("ai_code_review_result") or result.get("ai_code_review_result")
+        dashboard_state["generated_target"] = generated_target
+        dashboard_state["forward_comparison_items"] = forward_comparison_items
+        render_migration_dashboard(dashboard_state)
+
+    elif active_section == "Overview":
         gap_analysis = result.get("gap_analysis", {})
         collated = result.get("collated_spec", {})
         overview_gap_confidence = to_float(gap_analysis.get("confidence", {}).get("gap_confidence", 0.0))
@@ -2481,6 +4189,13 @@ def main() -> None:
                     st.session_state["validation_error"] = None
                     st.session_state["data_mapping_result"] = None
                     st.session_state["data_mapping_error"] = None
+                    st.session_state["ai_code_review_result"] = None
+                    st.session_state["ai_code_review_error"] = None
+                    st.session_state["github_publish_result"] = None
+                    st.session_state["github_publish_error"] = None
+                    st.session_state["github_branch_name"] = ""
+                    st.session_state["github_commit_message"] = ""
+                    st.session_state["github_pr_title"] = ""
                     st.success("Requirements approved. Continuing automatically to technical specification generation.")
                     st.rerun()
                 else:
@@ -2497,6 +4212,13 @@ def main() -> None:
                     st.session_state["approved_requirements"] = None
                     st.session_state["approved_technical_spec"] = None
                     st.session_state["analysis_result"]["requirements_draft"] = rejected_doc
+                    st.session_state["ai_code_review_result"] = None
+                    st.session_state["ai_code_review_error"] = None
+                    st.session_state["github_publish_result"] = None
+                    st.session_state["github_publish_error"] = None
+                    st.session_state["github_branch_name"] = ""
+                    st.session_state["github_commit_message"] = ""
+                    st.session_state["github_pr_title"] = ""
                     st.warning("Requirements rejected. Run the analysis again to regenerate the draft.")
                     st.rerun()
                 else:
@@ -2536,6 +4258,13 @@ def main() -> None:
                     st.session_state["validation_error"] = None
                     st.session_state["data_mapping_result"] = None
                     st.session_state["data_mapping_error"] = None
+                    st.session_state["ai_code_review_result"] = None
+                    st.session_state["ai_code_review_error"] = None
+                    st.session_state["github_publish_result"] = None
+                    st.session_state["github_publish_error"] = None
+                    st.session_state["github_branch_name"] = ""
+                    st.session_state["github_commit_message"] = ""
+                    st.session_state["github_pr_title"] = ""
                     st.success("Technical specification approved. Continuing automatically to forward engineering generation.")
                     st.rerun()
                 else:
@@ -2551,6 +4280,13 @@ def main() -> None:
                     )
                     st.session_state["approved_technical_spec"] = None
                     st.session_state["analysis_result"]["technical_spec_draft"] = rejected_doc
+                    st.session_state["ai_code_review_result"] = None
+                    st.session_state["ai_code_review_error"] = None
+                    st.session_state["github_publish_result"] = None
+                    st.session_state["github_publish_error"] = None
+                    st.session_state["github_branch_name"] = ""
+                    st.session_state["github_commit_message"] = ""
+                    st.session_state["github_pr_title"] = ""
                     st.warning("Technical specification rejected. Run the analysis again to regenerate the draft.")
                     st.rerun()
                 else:
@@ -2567,24 +4303,6 @@ def main() -> None:
                 forward_comparison_items,
                 generated_target.get("generated_root", ""),
             )
-            if st.button("Validate Generated Target", use_container_width=True):
-                try:
-                    st.session_state["validation_error"] = None
-                    with st.spinner("Running validation on generated target artifacts..."):
-                        validation_result = validation_agent.run(
-                            legacy_spec=result.get("legacy_spec", {}),
-                            requirements=requirements_draft,
-                            technical_spec=technical_spec_draft,
-                            generated_files=generated_target.get("generated_files", []),
-                            logger=lambda _a, _m: None,
-                        )
-                    st.session_state["validation_result"] = validation_result
-                    st.session_state["analysis_result"]["validation_result"] = validation_result
-                    st.session_state["pending_main_section"] = "Validation"
-                    st.rerun()
-                except Exception as exc:
-                    st.session_state["validation_error"] = str(exc)
-                    st.rerun()
 
     elif active_section == "Forward Engineering Proof":
         if requirements_status != SME_APPROVED:
@@ -2594,24 +4312,25 @@ def main() -> None:
         else:
             render_forward_engineering_proof(forward_comparison_items)
             st.markdown("**Post-Generation Analysis**")
+            if st.button("Validate Generated Target", use_container_width=True):
+                try:
+                    run_validation_from_workspace(
+                        result=result,
+                        requirements_draft=requirements_draft,
+                        technical_spec_draft=technical_spec_draft,
+                        generated_target=generated_target,
+                    )
+                except Exception as exc:
+                    st.session_state["validation_error"] = str(exc)
+                    st.rerun()
             if st.button("Data Mapping and Reconciliation", use_container_width=True):
                 try:
-                    st.session_state["data_mapping_error"] = None
-                    generated_sql_folder = str(Path(generated_target.get("generated_root", "")) / "sql")
-                    with st.spinner("Running final data mapping analysis on the generated target..."):
-                        data_mapping_result = data_mapping_agent.run(
-                            legacy_spec=result.get("legacy_spec", {}),
-                            target_spec=result.get("target_spec", {}),
-                            generated_code_folder=generated_target.get("generated_root", ""),
-                            generated_sql_folder=generated_sql_folder,
-                            legacy_data_dictionary_folder=legacy_data_dictionary_folder,
-                            target_data_dictionary_folder=target_data_dictionary_folder,
-                            logger=lambda _a, _m: None,
-                        )
-                    st.session_state["data_mapping_result"] = data_mapping_result
-                    st.session_state["analysis_result"]["data_mapping_result"] = data_mapping_result
-                    st.session_state["pending_main_section"] = "Final Data Mapping"
-                    st.rerun()
+                    run_final_data_mapping_from_workspace(
+                        result=result,
+                        generated_target=generated_target,
+                        legacy_data_dictionary_folder=legacy_data_dictionary_folder,
+                        target_data_dictionary_folder=target_data_dictionary_folder,
+                    )
                 except Exception as exc:
                     st.session_state["data_mapping_error"] = str(exc)
                     st.rerun()
@@ -2624,6 +4343,19 @@ def main() -> None:
         elif not result.get("forward_engineering_output"):
             st.info("Final data mapping is available after forward engineering generates target artifacts.")
         else:
+            if not (st.session_state.get("data_mapping_result") or result.get("data_mapping_result")):
+                st.markdown("**Run Final Data Mapping**")
+                if st.button("Run Data Mapping and Reconciliation", use_container_width=True):
+                    try:
+                        run_final_data_mapping_from_workspace(
+                            result=result,
+                            generated_target=generated_target,
+                            legacy_data_dictionary_folder=legacy_data_dictionary_folder,
+                            target_data_dictionary_folder=target_data_dictionary_folder,
+                        )
+                    except Exception as exc:
+                        st.session_state["data_mapping_error"] = str(exc)
+                        st.rerun()
             if st.session_state.get("data_mapping_error"):
                 st.error(st.session_state["data_mapping_error"])
             data_mapping_result = st.session_state.get("data_mapping_result") or result.get("data_mapping_result")
@@ -2637,10 +4369,143 @@ def main() -> None:
         elif not result.get("forward_engineering_output"):
             st.info("Validation is available after forward engineering generates target artifacts.")
         else:
+            if not (st.session_state.get("validation_result") or result.get("validation_result")):
+                st.markdown("**Run Validation**")
+                if st.button("Run Validation", use_container_width=True):
+                    try:
+                        run_validation_from_workspace(
+                            result=result,
+                            requirements_draft=requirements_draft,
+                            technical_spec_draft=technical_spec_draft,
+                            generated_target=generated_target,
+                        )
+                    except Exception as exc:
+                        st.session_state["validation_error"] = str(exc)
+                        st.rerun()
             if st.session_state.get("validation_error"):
                 st.error(st.session_state["validation_error"])
             validation_result = st.session_state.get("validation_result") or result.get("validation_result")
             render_validation_result(validation_result)
+
+    elif active_section == "AI Code Review":
+        publish_result = st.session_state.get("github_publish_result") or result.get("github_publish_result") or {}
+        publish_config = resolve_publish_config(result, target_repo_branch)
+        if requirements_status != SME_APPROVED:
+            st.info("AI Code Review is blocked until the requirements draft is SME approved.")
+        elif technical_spec_status != ARCHITECT_APPROVED:
+            st.info("AI Code Review is blocked until the technical specification is architect approved.")
+        elif not result.get("forward_engineering_output"):
+            st.info("AI Code Review is available after forward engineering generates target artifacts.")
+        else:
+            st.markdown("**GitHub PR Configuration**")
+            st.caption(f"Repository: {target_repo_full_name}")
+            if not get_github_token():
+                st.warning("GITHUB_TOKEN is not configured. Set it in the environment before creating a PR or posting review comments.")
+
+            if not st.session_state.get("github_base_branch"):
+                st.session_state["github_base_branch"] = publish_config["base_branch"]
+            if not st.session_state.get("github_branch_name"):
+                st.session_state["github_branch_name"] = publish_config["branch_name"]
+            if not st.session_state.get("github_commit_message"):
+                st.session_state["github_commit_message"] = publish_config["commit_message"]
+            if not st.session_state.get("github_pr_title"):
+                st.session_state["github_pr_title"] = publish_config["pr_title"]
+
+            base_col, branch_col = st.columns(2)
+            with base_col:
+                st.text_input("Base branch", key="github_base_branch")
+            with branch_col:
+                st.text_input("Publish branch", key="github_branch_name")
+
+            st.text_input("Commit message", key="github_commit_message")
+            st.text_input("PR title", key="github_pr_title")
+
+            if st.session_state.get("github_publish_error"):
+                st.error(st.session_state["github_publish_error"])
+            if publish_result:
+                render_table(
+                    [
+                        {"metric": "Repository", "value": publish_result.get("repository_full_name", "")},
+                        {"metric": "Branch", "value": publish_result.get("branch_name", "")},
+                        {"metric": "Base", "value": publish_result.get("base_branch", "")},
+                        {"metric": "PR URL", "value": publish_result.get("pr_url", "") or "Created"},
+                    ],
+                    "No PR details available.",
+                )
+
+            if not (st.session_state.get("ai_code_review_result") or result.get("ai_code_review_result")):
+                st.markdown("**Run AI Code Review**")
+                st.caption("This review evaluates the generated code diff against approved requirements, technical design, validation, and mapping results. If no PR is stored in state, the app creates or recovers one from the current publish branch before posting the review.")
+                if st.button("Create or Reuse PR and Post AI Review", use_container_width=True, disabled=not bool(get_github_token())):
+                    try:
+                        st.session_state["github_publish_error"] = None
+                        st.session_state["ai_code_review_error"] = None
+                        generated_diff = build_ai_code_review_input(forward_comparison_items)
+                        with st.spinner("Generating AI code review findings and posting them to the PR..."):
+                            if not publish_result:
+                                current_publish_config = {
+                                    "branch_name": st.session_state.get("github_branch_name", "").strip(),
+                                    "base_branch": st.session_state.get("github_base_branch", "").strip(),
+                                    "commit_message": st.session_state.get("github_commit_message", "").strip(),
+                                    "pr_title": st.session_state.get("github_pr_title", "").strip(),
+                                }
+                                if not current_publish_config["branch_name"]:
+                                    raise RuntimeError("No publish branch is available. Enter the branch and PR details in AI Code Review first.")
+                                existing_pr = github_find_open_pr(
+                                    target_repo_full_name,
+                                    current_publish_config["branch_name"],
+                                    current_publish_config["base_branch"],
+                                )
+                                if existing_pr:
+                                    publish_result = {
+                                        "repository_full_name": target_repo_full_name,
+                                        "branch_name": current_publish_config["branch_name"],
+                                        "base_branch": current_publish_config["base_branch"],
+                                        "commit_message": current_publish_config["commit_message"],
+                                        "commit_sha": "",
+                                        "pr_title": existing_pr.get("title", current_publish_config["pr_title"]),
+                                        "pr_number": existing_pr.get("number", 0),
+                                        "pr_url": existing_pr.get("html_url", ""),
+                                        "staged_files": [],
+                                    }
+                                else:
+                                    publish_result = publish_generated_target_pr(
+                                        generated_target=generated_target,
+                                        result=result,
+                                        comparison_items=forward_comparison_items,
+                                        target_repo_full_name=target_repo_full_name,
+                                        target_code_root=target_repo_code_root,
+                                        branch_name=current_publish_config["branch_name"],
+                                        base_branch=current_publish_config["base_branch"],
+                                        commit_message=current_publish_config["commit_message"],
+                                        pr_title=current_publish_config["pr_title"],
+                                    )
+                                st.session_state["github_publish_result"] = publish_result
+                                st.session_state["analysis_result"]["github_publish_result"] = publish_result
+                            review_result = ai_code_review_agent.run(
+                                requirements=requirements_draft,
+                                technical_spec=technical_spec_draft,
+                                validation_result=st.session_state.get("validation_result") or result.get("validation_result") or {},
+                                data_mapping_result=st.session_state.get("data_mapping_result") or result.get("data_mapping_result") or {},
+                                generated_diff=generated_diff,
+                                logger=lambda _a, _m: None,
+                            )
+                            github_post_pr_review_comment(
+                                repo_full_name=publish_result.get("repository_full_name", ""),
+                                pr_number=int(publish_result.get("pr_number", 0)),
+                                review_body=review_result.get("review_comment_markdown", ""),
+                            )
+                        st.session_state["ai_code_review_result"] = review_result
+                        st.session_state["analysis_result"]["ai_code_review_result"] = review_result
+                        st.session_state["pending_main_section"] = "AI Code Review"
+                        st.rerun()
+                    except Exception as exc:
+                        st.session_state["ai_code_review_error"] = str(exc)
+                        st.rerun()
+            if st.session_state.get("ai_code_review_error"):
+                st.error(st.session_state["ai_code_review_error"])
+            ai_code_review_result = st.session_state.get("ai_code_review_result") or result.get("ai_code_review_result")
+            render_ai_code_review_result(ai_code_review_result)
 
     elif active_section == "Execution Logs":
         render_logs(result.get("logs", []))

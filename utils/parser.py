@@ -105,7 +105,9 @@ def normalize_forward_engineering_output(payload: dict[str, Any]) -> dict[str, A
     return {
         "document_type": payload.get("document_type", "forward_engineering_output"),
         "angular_files": ensure_list(payload.get("angular_files")),
+        "angular_test_files": ensure_list(payload.get("angular_test_files")),
         "nodejs_files": ensure_list(payload.get("nodejs_files")),
+        "nodejs_test_files": ensure_list(payload.get("nodejs_test_files")),
         "postgres_files": ensure_list(payload.get("postgres_files")),
         "test_cases": ensure_list(payload.get("test_cases")),
         "generation_notes": ensure_list(payload.get("generation_notes")),
@@ -168,4 +170,20 @@ def normalize_data_mapping_output(payload: dict[str, Any]) -> dict[str, Any]:
             "mapping_confidence": ensure_float(confidence.get("mapping_confidence", 0.0)),
             "notes": ensure_list(confidence.get("notes")),
         },
+    }
+
+
+def normalize_ai_code_review_output(payload: dict[str, Any]) -> dict[str, Any]:
+    summary = payload.get("summary", {})
+    return {
+        "summary": {
+            "overall_recommendation": summary.get("overall_recommendation", "comment"),
+            "risk_level": summary.get("risk_level", "medium"),
+            "total_findings": int(ensure_float(summary.get("total_findings", 0))),
+            "critical_findings": int(ensure_float(summary.get("critical_findings", 0))),
+            "notes": ensure_list(summary.get("notes")),
+        },
+        "findings": ensure_list(payload.get("findings")),
+        "strengths": ensure_list(payload.get("strengths")),
+        "review_comment_markdown": payload.get("review_comment_markdown", ""),
     }

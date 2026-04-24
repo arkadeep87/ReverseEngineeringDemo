@@ -657,12 +657,28 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
             "content": "// Mock Angular implementation artifact",
         }
     ]
+    angular_test_files = [
+        {
+            "file_name": "quote-generation.component.spec.ts",
+            "purpose": "Unit tests for the approved quote-generation UI flow.",
+            "related_requirement_ids": ["F001"],
+            "content": "// Mock Angular unit test artifact",
+        }
+    ]
     nodejs_files = [
         {
             "file_name": "quote-workflow.service.js",
             "purpose": "Implements the approved orchestration flow.",
             "related_requirement_ids": ["F001", "C001"],
             "content": "// Mock Node.js implementation artifact",
+        }
+    ]
+    nodejs_test_files = [
+        {
+            "file_name": "quote-workflow.service.test.js",
+            "purpose": "Unit tests for the approved orchestration flow.",
+            "related_requirement_ids": ["F001", "C001"],
+            "content": "// Mock Node.js unit test artifact",
         }
     ]
     postgres_files = [
@@ -693,6 +709,14 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
                 "content": "// Mock Node.js country-specific implementation artifact",
             }
         )
+        nodejs_test_files.append(
+            {
+                "file_name": "country-rule-orchestration.service.test.js",
+                "purpose": "Unit tests for country-specific orchestration behavior.",
+                "related_requirement_ids": [*country_requirement_ids, "M001"],
+                "content": "// Mock Node.js country-specific unit test artifact",
+            }
+        )
         postgres_files.append(
             {
                 "file_name": "country_rule_configuration.sql",
@@ -715,7 +739,9 @@ def _build_mock_forward_engineering_response(input_payload: dict) -> dict:
     return {
         "document_type": "forward_engineering_output",
         "angular_files": angular_files,
+        "angular_test_files": angular_test_files,
         "nodejs_files": nodejs_files,
+        "nodejs_test_files": nodejs_test_files,
         "postgres_files": postgres_files,
         "test_cases": test_cases,
         "generation_notes": ["Generated from approved requirements and approved technical specification."],
@@ -774,6 +800,58 @@ def _build_mock_validation_response(input_payload: dict) -> dict:
             "validation_confidence": 0.82,
             "notes": ["Mock validation output generated without live LLM execution."],
         },
+    }
+
+
+def _build_mock_ai_code_review_response(input_payload: dict) -> dict:
+    generated_diff = ensure_list(input_payload.get("generated_diff"))
+    impacted_files = []
+    for item in generated_diff[:4]:
+        if isinstance(item, dict):
+            impacted_files.append(item.get("generated_relative_path") or item.get("file_name", ""))
+    findings = [
+        {
+            "severity": "high",
+            "category": "parity_gap",
+            "title": "Country-specific parity still needs targeted review coverage",
+            "details": "Generated workflow and service artifacts appear to cover the core path, but country-specific behavior still carries parity risk based on prior validation and gap analysis.",
+            "impacted_files": impacted_files[:2],
+            "recommended_action": "Review generated service logic and unit tests for country-specific scenarios before merge.",
+            "related_requirement_ids": ["F001"],
+        },
+        {
+            "severity": "medium",
+            "category": "test_gap",
+            "title": "Automated tests should explicitly cover negative-path validation",
+            "details": "Generated unit test assets demonstrate the happy path, but explicit negative-path scenarios are not strongly evidenced in the generated diff summary.",
+            "impacted_files": impacted_files[2:4],
+            "recommended_action": "Add negative-path validation and consent/error handling cases to the generated automated test suite.",
+            "related_requirement_ids": ["C001"],
+        },
+    ]
+    review_lines = [
+        "## AI Code Review",
+        "",
+        "### Findings",
+    ]
+    for finding in findings:
+        review_lines.append(f"- **{finding['severity'].upper()} | {finding['category']}**: {finding['title']}")
+        review_lines.append(f"  - {finding['details']}")
+        review_lines.append(f"  - Recommended action: {finding['recommended_action']}")
+        if finding["impacted_files"]:
+            review_lines.append(f"  - Impacted files: {', '.join(str(item) for item in finding['impacted_files'])}")
+    review_lines.extend(["", "### Strengths", "- Generated code and automated tests preserve clear requirement traceability in the produced artifacts."])
+    return {
+        "summary": {
+            "overall_recommendation": "comment",
+            "risk_level": "medium",
+            "total_findings": len(findings),
+            "critical_findings": 0,
+            "notes": ["Mock AI code review generated without a live model call."],
+        },
+        "findings": findings,
+        "strengths": ["Generated code and automated tests preserve requirement traceability."],
+        "review_comment_markdown": "\n".join(review_lines),
     }
 
 
@@ -911,6 +989,8 @@ def _build_mock_response(agent_name: str, input_payload: dict) -> dict:
 
     if agent_name == "validation":
         return _build_mock_validation_response(input_payload)
+    if agent_name == "ai_code_review":
+        return _build_mock_ai_code_review_response(input_payload)
 
     if agent_name == "data_mapping":
         return _build_mock_data_mapping_response(input_payload)

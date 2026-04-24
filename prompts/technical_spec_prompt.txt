@@ -116,6 +116,10 @@ Rules:
 - Service design entries should describe orchestration responsibilities, supported business rules, sequencing intent, and error-handling expectations where relevant.
 - Data design entries should describe entity purpose, key fields, relationships, and why the data is needed for traceability, compliance, workflow recovery, or pricing integrity.
 - Rule configuration design entries should explain where rule externalization is required, how precedence/fallback should work, and how rule versioning or effective dating should support operational governance.
+- Do not leave variable business rules embedded as application literals when they can be externalized. Country-specific pricing, tax, surcharge, discount, eligibility, threshold, and compliance logic should be designed as configuration-backed or reference-data-backed behavior unless the approved requirements explicitly require a fixed literal.
+- For rule areas with operational variability, describe the reference-data entities, configuration records, lookup keys, versioning, effective dating, precedence, auditability, and fallback behavior required to support governed change.
+- Make the rule_configuration_design explicit enough that forward engineering can implement rule tables, configuration records, lookup services, or repositories instead of hardcoded switch/case logic.
+- Where data_design or integration_design depends on externalized rules, include the necessary tables, entities, relationships, or repository/integration responsibilities needed to read and apply those rules.
 - Validation design entries should describe decision points, rejection behavior, and the architectural layer responsible for enforcement.
 - Security and compliance design entries should explain control intent, audit expectations, and data-protection considerations in practical architecture language.
 - Integration design entries should describe dependencies on externalized reference data, workflow integrations, reporting or audit sinks, and operational interfaces where needed.

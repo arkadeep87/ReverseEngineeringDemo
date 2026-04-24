@@ -27,7 +27,23 @@ Return STRICT JSON only in the following structure:
       "content": ""
     }
   ],
+  "angular_test_files": [
+    {
+      "file_name": "",
+      "purpose": "",
+      "related_requirement_ids": [],
+      "content": ""
+    }
+  ],
   "nodejs_files": [
+    {
+      "file_name": "",
+      "purpose": "",
+      "related_requirement_ids": [],
+      "content": ""
+    }
+  ],
+  "nodejs_test_files": [
     {
       "file_name": "",
       "purpose": "",
@@ -61,6 +77,16 @@ Rules:
 - Preserve traceability to requirement IDs.
 - Do not add speculative enhancements.
 - Align output to Angular, Node.js, and PostgreSQL.
+- Treat the approved technical specification as authoritative for rule externalization. If the design calls for configuration-backed or reference-data-backed rules, implement lookup-driven or repository-driven behavior rather than embedding business literals directly in frontend or service code.
+- Do not hardcode country-specific rates, tax percentages, discount percentages, surcharge values, eligibility thresholds, or rule branches in application code when the approved design indicates configuration, rule tables, reference data, versioning, or effective dating.
+- When variable business rules are required, generate the supporting PostgreSQL artifacts and corresponding service or repository access logic needed to read rule configuration or reference data.
+- Prefer configuration or reference-data artifacts with names and purposes that clearly express rule storage, lookup, versioning, and traceability.
+- Use generation_notes to state that rule variability was externalized into configuration or reference data when applicable.
+- Generate automated unit test files for the Angular and Node.js artifacts whenever the approved inputs provide enough behavior to test.
+- Prefer Angular test file names that follow `*.spec.ts`.
+- Prefer Node.js unit test file names that follow `*.test.js` or `*.spec.js`.
+- Unit tests must validate approved business behavior, validations, and country-specific scenarios when present.
 - Ensure country-specific approved requirements are reflected in generated implementation artifacts and tests when present.
 - Include traceability_summary entries that show how country-specific requirement IDs were implemented.
+- If the approved inputs require configurable or reference-data-driven behavior, the generated output must include at least one concrete configuration or reference-data artifact in the returned files and corresponding implementation/test coverage.
 - Return JSON only.

@@ -125,6 +125,9 @@ Rules:
 - Write requirement descriptions in formal BRD language using business wording such as `The system shall...`, `The solution shall...`, or `The process shall...`.
 - Do not write placeholder or generic requirement text such as `support country-specific logic` unless the exact behavior is genuinely unknown.
 - For each functional requirement, explain the expected business outcome and user or operational impact clearly enough for SME approval.
+- When a business rule varies by country, product, threshold, tax rate, surcharge, discount, eligibility band, or effective date, write the requirement so downstream design can externalize that rule into configuration or reference data instead of embedding literals in application code.
+- When the inputs show reference-data usage, lookup-table usage, configurable thresholds, configurable rates, or configurable sequencing, state that dependency explicitly in the requirement description or acceptance criteria.
+- For pricing, tax, discount, surcharge, eligibility, and compliance rules that may change operationally, prefer wording that supports rule externalization, versioning, effective dating, precedence, and auditable rule traceability.
 - Use professional requirement IDs:
   - Functional requirements: `F001`, `F002`, `F003`, ...
   - Non-functional requirements: `N001`, `N002`, ...

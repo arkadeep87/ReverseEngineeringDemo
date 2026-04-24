@@ -1,0 +1,86 @@
+<section>
+  <h1>Insurance Quote Generation</h1>
+
+  <div *ngIf="apiMessages.length > 0" aria-live="polite">
+    <div *ngFor="let message of apiMessages">{{ message }}</div>
+  </div>
+
+  <form [formGroup]="form" (ngSubmit)="submit()">
+    <div>
+      <label for="customerId">Customer Identifier</label>
+      <input id="customerId" type="text" formControlName="customerId" />
+      <div *ngIf="hasFieldError('customerId')">{{ fieldErrorMessage('customerId') }}</div>
+    </div>
+
+    <div>
+      <label for="age">Age</label>
+      <input id="age" type="number" formControlName="age" />
+      <div *ngIf="hasFieldError('age')">{{ fieldErrorMessage('age') }}</div>
+    </div>
+
+    <div>
+      <label for="countryCode">Country</label>
+      <select id="countryCode" formControlName="countryCode" (change)="onCountryChange()">
+        <option value="">Select</option>
+        <option *ngFor="let country of enabledCountries" [value]="country">{{ country }}</option>
+      </select>
+      <div *ngIf="hasFieldError('countryCode')">{{ fieldErrorMessage('countryCode') }}</div>
+    </div>
+
+    <div>
+      <label for="policyType">Policy Type</label>
+      <select id="policyType" formControlName="policyType">
+        <option value="">Select</option>
+        <option *ngFor="let policy of activePolicyDefinitions" [value]="policy.policyType">{{ policy.policyType }}</option>
+      </select>
+      <div *ngIf="hasFieldError('policyType')">{{ fieldErrorMessage('policyType') }}</div>
+    </div>
+
+    <div>
+      <label for="coverageAmount">Coverage Amount</label>
+      <input id="coverageAmount" type="number" formControlName="coverageAmount" />
+      <div *ngIf="hasFieldError('coverageAmount')">{{ fieldErrorMessage('coverageAmount') }}</div>
+    </div>
+
+    <div>
+      <label for="customerSegment">Customer Segment</label>
+      <input id="customerSegment" type="text" formControlName="customerSegment" />
+      <div *ngIf="hasFieldError('customerSegment')">{{ fieldErrorMessage('customerSegment') }}</div>
+    </div>
+
+    <div>
+      <label for="paymentFrequency">Payment Frequency</label>
+      <select id="paymentFrequency" formControlName="paymentFrequency">
+        <option value="">Select</option>
+        <option *ngFor="let frequency of paymentFrequencies" [value]="frequency.frequencyCode">{{ frequency.frequencyCode }}</option>
+      </select>
+      <div *ngIf="hasFieldError('paymentFrequency')">{{ fieldErrorMessage('paymentFrequency') }}</div>
+    </div>
+
+    <fieldset>
+      <legend>GDPR Consent</legend>
+      <p>{{ consentNotice }}</p>
+      <label>
+        <input type="radio" formControlName="consentStatus" value="GRANTED" /> Granted
+      </label>
+      <label>
+        <input type="radio" formControlName="consentStatus" value="DENIED" /> Denied
+      </label>
+      <div *ngIf="hasFieldError('consentStatus')">{{ fieldErrorMessage('consentStatus') }}</div>
+    </fieldset>
+
+    <button type="submit" [disabled]="loading || loadingReferenceData">Generate Quote</button>
+  </form>
+
+  <section *ngIf="submissionResult && submissionResult.outcomeStatus === 'SUCCESS'">
+    <h2>Quote Result Summary</h2>
+    <div>Quote Identifier: {{ submissionResult.quoteId }}</div>
+    <div>Final Premium: {{ submissionResult.finalPremium }}</div>
+    <div>Country Adjustment Amount: {{ submissionResult.countryAdjustmentAmount }}</div>
+    <div *ngIf="submissionResult.underwritingStatus">Underwriting Status: {{ submissionResult.underwritingStatus }}</div>
+    <div *ngIf="submissionResult.basePremium !== undefined">Base Premium: {{ submissionResult.basePremium }}</div>
+    <div *ngIf="submissionResult.riskLoadingAmount !== undefined">Risk Loading Amount: {{ submissionResult.riskLoadingAmount }}</div>
+    <div *ngIf="submissionResult.discountAmount !== undefined">Discount Amount: {{ submissionResult.discountAmount }}</div>
+    <div *ngIf="submissionResult.taxAmount !== undefined">Tax Amount: {{ submissionResult.taxAmount }}</div>
+  </section>
+</section>
